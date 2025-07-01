@@ -13,6 +13,7 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 class MyApp(QtWidgets.QMainWindow):
+    #初始化
     def __init__(self):
         super(MyApp, self).__init__()
         uic.loadUi("score/UI.ui", self)
@@ -24,6 +25,7 @@ class MyApp(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self.update_progress)
         self.progress = 0
 
+    #用彈窗提示錯誤
     @QtCore.pyqtSlot(str, str)
     def show_error_message(self, title, message):
         msg_box = QtWidgets.QMessageBox(self)
@@ -32,10 +34,11 @@ class MyApp(QtWidgets.QMainWindow):
         msg_box.setText(message)
         msg_box.exec_()
 
+    #停止計時器
     @QtCore.pyqtSlot()
     def stop_timer(self):
         self.timer.stop()
-
+    #開始時介面設置
     def start_separation(self):
         self.progress = 0
         self.progressBar.setValue(0)
@@ -44,7 +47,7 @@ class MyApp(QtWidgets.QMainWindow):
         self.timer.start(100)
         thread = threading.Thread(target=self.run_separation)
         thread.start()
-
+    #隨機增加進度條
     def update_progress(self):
         if self.progress < 95:
             increment = random.randint(1, 3)
@@ -56,8 +59,10 @@ class MyApp(QtWidgets.QMainWindow):
     def run_separation(self):
         sources = None
         waveform = None
+        #嘗試載入模型
         try:
             bundle = HDEMUCS_HIGH_MUSDB
+            #bundle = DEMUCS_HTDEMOS
             model = bundle.get_model()
         except Exception as e:
             QtCore.QMetaObject.invokeMethod(self, "stop_timer", QtCore.Qt.QueuedConnection)
@@ -71,9 +76,11 @@ class MyApp(QtWidgets.QMainWindow):
             return
 
         try:
+            #如果有NVIDIA顯卡則使用cuda，否則用CPU
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             model = model.to(device)
 
+            #取得音樂檔案
             input_file = 'score/music/' + self.lineEdit.text()
             if not os.path.exists(input_file):
                 self.update_output_label(f"找不到輸入檔案：{input_file}")
@@ -88,10 +95,11 @@ class MyApp(QtWidgets.QMainWindow):
                 return
 
             ext = os.path.splitext(input_file)[1].lower()
-
+            #如果檔案格式為wav
             if ext == '.wav':
                 waveform, sample_rate = torchaudio.load(input_file)
 
+            #否則ffmpeg轉檔
             else:
                 temp_wav = "temp_convert.wav"
                 try:
@@ -99,12 +107,13 @@ class MyApp(QtWidgets.QMainWindow):
                         "ffmpeg", "-y", "-i", input_file, "-acodec", "pcm_s16le", "-ar", "44100", temp_wav
                     ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                    # 用 soundfile 讀 temp wav
+                    #用soundfile讀temp wav
                     data, sample_rate = sf.read(temp_wav, dtype='float32')
                     if data.ndim == 1:
                         data = data[:, None]
                     waveform = torch.from_numpy(data.T)
-
+                
+                #如果ffmpeg轉檔失敗
                 except subprocess.CalledProcessError as ffmpeg_err:
                     QtCore.QMetaObject.invokeMethod(self, "stop_timer", QtCore.Qt.QueuedConnection)
                     QtCore.QMetaObject.invokeMethod(
@@ -119,33 +128,52 @@ class MyApp(QtWidgets.QMainWindow):
                     if os.path.exists(temp_wav):
                         os.remove(temp_wav)
 
-            # 重採樣
+            #重採樣
             if sample_rate != bundle.sample_rate:
                 resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=bundle.sample_rate)
                 waveform = resampler(waveform)
 
             waveform = waveform.to(device)
-
+            
+            #開始執行分離
             with torch.no_grad():
-                sources = model(waveform.unsqueeze(0))[0]
-
+                try:
+                    sources = model(waveform.unsqueeze(0))[0]
+                #如果顯存不足改CPU跑
+                except RuntimeError as oom_error:
+                    if 'out of memory' in str(oom_error).lower() and device.type == 'cuda':
+                        print("GPU 記憶體不足，切換到 CPU 重跑...")
+                        torch.cuda.empty_cache()
+                        device = torch.device('cpu')
+                        model = model.to(device)
+                        waveform = waveform.to(device)
+                        sources = model(waveform.unsqueeze(0))[0]
+                    else:
+                        raise oom_error
+            
+            #取得輸出路徑及建立資料夾
             base_name = os.path.splitext(os.path.basename(input_file))[0]
             output_dir = os.path.join(os.getcwd(), "score/output", base_name)
             os.makedirs(output_dir, exist_ok=True)
 
+            #混音(Bass、Drum、Other)
             other_mix = sources[0] + sources[1] + sources[2]
             vocals = sources[3]
-
+            
+            #存檔
             torchaudio.save(os.path.join(output_dir, base_name + '-vocals.wav'), vocals.cpu(), bundle.sample_rate)
             torchaudio.save(os.path.join(output_dir, base_name + '-other.wav'), other_mix.cpu(), bundle.sample_rate)
-
+            
+            #輸出儲存位置
             print(f"已儲存：{os.path.join(output_dir, base_name + '-vocals.wav')}")
             print(f"已儲存：{os.path.join(output_dir, base_name + '-other.wav')}")
-
+            
+            #清空顯存及暫存資料
             del sources
             del waveform
             torch.cuda.empty_cache()
-
+            
+            #設定進度條及label
             QtCore.QMetaObject.invokeMethod(self, "stop_timer", QtCore.Qt.QueuedConnection)
             QtCore.QMetaObject.invokeMethod(
                 self.progressBar,
@@ -154,8 +182,10 @@ class MyApp(QtWidgets.QMainWindow):
                 QtCore.Q_ARG(int, 100)
             )
             self.update_output_label("音源分離完成！")
-
+        
+        #如果有錯誤
         except Exception as e:
+            #嘗試刪除暫存音樂
             try:
                 if sources is not None:
                     del sources
@@ -163,8 +193,11 @@ class MyApp(QtWidgets.QMainWindow):
                     del waveform
             except:
                 pass
+                
+            #清顯存
             torch.cuda.empty_cache()
-
+            
+            #顯示錯誤
             QtCore.QMetaObject.invokeMethod(self, "stop_timer", QtCore.Qt.QueuedConnection)
             QtCore.QMetaObject.invokeMethod(
                 self,
@@ -174,7 +207,8 @@ class MyApp(QtWidgets.QMainWindow):
                 QtCore.Q_ARG(str, str(e))
             )
             print(f"執行錯誤：{e}")
-
+    
+    #label輸出
     def update_output_label(self, text):
         QtCore.QMetaObject.invokeMethod(
             self.label_OUTPUT,
