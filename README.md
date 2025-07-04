@@ -12,7 +12,7 @@
 |網頁|0|沒時間||
 |歌詞辨識|0|還沒學||
 |畫面輸出|0|沒時間||
-# 其他
+# 專題下載
 |專題可執行檔共用連結|
 |---|
 |https://drive.google.com/file/d/1V2ZyVUk13Eldb-n9etuWJm0wOarN98CT/view|
