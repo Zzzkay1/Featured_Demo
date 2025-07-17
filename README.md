@@ -15,4 +15,4 @@
 # 專題下載
 |專題可執行檔共用連結|
 |---|
-|https://drive.google.com/file/d/1V2ZyVUk13Eldb-n9etuWJm0wOarN98CT/view|
+|https://drive.google.com/drive/folders/11-JMH2Qbn9LwW98IeQsyuFpLJeQUu9LD?usp=sharing|
