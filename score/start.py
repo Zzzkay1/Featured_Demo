@@ -4,6 +4,7 @@ import torch
 import torchaudio
 import soundfile as sf
 import numpy as np
+from psutil import virtual_memory
 from torchaudio.pipelines import HDEMUCS_HIGH_MUSDB
 from PyQt5 import QtWidgets, uic, QtCore
 import threading
@@ -11,6 +12,9 @@ import random
 import subprocess
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
+from YouTubeDownload import YouTubeDownload
+from WebDisplay import WebDisplay
+from MusicSeparation import MusicSeparation
 
 class MyApp(QtWidgets.QMainWindow):
     #初始化
@@ -76,8 +80,14 @@ class MyApp(QtWidgets.QMainWindow):
             return
 
         try:
-            #如果有NVIDIA顯卡則使用cuda，否則用CPU
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            #如果有NVIDIA顯卡且顯存足夠則使用cuda，否則用CPU
+            GPUmem = torch.cuda.mem_get_info()[1]
+            GPUmem = GPUmem /1024 / 1024 / 1024
+            SYSmem = virtual_memory().total /1024 / 1024 / 1024 / 2
+            if torch.cuda.is_available() and SYSmem + GPUmem > 16:
+                device = torch.device("cuda")
+            else:
+                device = torch.device("cpu")
             model = model.to(device)
 
             #取得音樂檔案
