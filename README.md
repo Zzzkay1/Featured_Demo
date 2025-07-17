@@ -1,7 +1,7 @@
 # 專題進度
 |目標|狀態|原因|相關連結|
 |---|---|---|---|
-|下載YouTube歌曲|0|沒時間||
+|下載YouTube歌曲|1||https://github.com/JuanBindez/pytubefix|
 |分離人聲|1||https://pytorch.org/|
 |歌曲儲存(可選)|1|||
 |QT|0.5|不會||
