@@ -5,6 +5,9 @@ from psutil import virtual_memory
 import subprocess
 import os
 import soundfile as sf
+import tkinter as tk
+from tkinter import filedialog
+import whisper
 class MusicSeparation:
     def __init__(self):
         self.sources = None
@@ -123,3 +126,87 @@ class MusicSeparation:
             #清顯存
             torch.cuda.empty_cache()
             return e
+        
+    #ASR辨識
+    @staticmethod
+    def run_ASR(audio=""):
+            #建立Tk主視窗，但隱藏
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)  #對話框出現在最前方
+
+        #傳入值如果為空由使用者手動選擇音訊檔案
+        if(audio==""):
+            current_dir = os.getcwd()
+            file_path = filedialog.askopenfilename(
+                title="請選擇音訊檔案",
+                initialdir=current_dir,
+                filetypes=[("音訊檔案", "*.wav *.mp3 *.m4a *.flac"), ("所有檔案", "*.*")]
+            )
+
+            if not file_path:
+                print("未選擇檔案")
+                exit()
+        else:
+            file_path = audio
+
+        print("選擇的檔案:", file_path)
+
+        #載入Whisper模型
+        if(torch.cuda.is_available()):
+            model = whisper.load_model("large-v3", device="cuda")
+        else:
+            model = whisper.load_model("large-v3", device="cpu")
+
+        #轉錄音訊，Whisper會自動偵測語言
+        result = model.transcribe(file_path)
+        print("偵測語言:", result["language"])
+
+        #輸出資料夾:與音訊檔同一層
+        audio_dir = os.path.dirname(file_path)
+
+        #取得音訊檔名稱(不含副檔名)
+        filename = os.path.splitext(os.path.basename(file_path))[0]
+
+        #---SRT---
+        with open(os.path.join(audio_dir, f"{filename}.srt"), "w", encoding="utf-8") as f:
+            for i, seg in enumerate(result["segments"], start=1):
+                text = seg['text'].strip()
+                if not text:
+                    continue
+                f.write(f"{i}\n")
+                start = seg["start"]
+                end = seg["end"]
+                start_time = f"{int(start//3600):02}:{int((start%3600)//60):02}:{int(start%60):02},{int((start%1)*1000):03}"
+                end_time = f"{int(end//3600):02}:{int((end%3600)//60):02}:{int(end%60):02},{int((end%1)*1000):03}"
+                f.write(f"{start_time} --> {end_time}\n")
+                f.write(f"{text}\n\n")
+
+        #---VTT---
+        with open(os.path.join(audio_dir, f"{filename}.vtt"), "w", encoding="utf-8") as f:
+            f.write("WEBVTT\n\n")
+            for seg in result["segments"]:
+                text = seg['text'].strip()
+                if not text:
+                    continue
+                start = seg["start"]
+                end = seg["end"]
+                start_time = f"{int(start//3600):02}:{int((start%3600)//60):02}:{int(start%60):02}.{int((start%1)*1000):03}"
+                end_time = f"{int(end//3600):02}:{int((end%3600)//60):02}:{int(end%60):02}.{int((end%1)*1000):03}"
+                f.write(f"{start_time} --> {end_time}\n")
+                f.write(f"{text}\n\n")
+
+        #---TXT---
+        with open(os.path.join(audio_dir, f"{filename}.txt"), "w", encoding="utf-8") as f:
+            for seg in result["segments"]:
+                text = seg['text'].strip()
+                if not text:
+                    continue
+                start = seg["start"]
+                end = seg["end"]
+                start_time = f"{int(start//3600):02}:{int((start%3600)//60):02}:{int(start%60):02}.{int((start%1)*1000):03}"
+                end_time = f"{int(end//3600):02}:{int((end%3600)//60):02}:{int(end%60):02}.{int((end%1)*1000):03}"
+                f.write(f"[{start_time} --> {end_time}] {text}\n")
+
+        print(f"已輸出至資料夾:{audio_dir}")
+        return audio_dir + f"{filename}.srt"
