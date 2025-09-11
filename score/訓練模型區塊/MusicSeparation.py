@@ -8,7 +8,6 @@ import os
 import soundfile as sf
 import tkinter as tk
 from tkinter import filedialog
-import whisper
 class MusicSeparation:
     def __init__(self):
         self.sources = None
@@ -134,6 +133,7 @@ class MusicSeparation:
     #---ASR辨識---
     @staticmethod
     def run_ASR(audio="" ,Input_language = ""):
+        import whisper
         #建立Tk主視窗，但隱藏
         root = tk.Tk()
         root.withdraw()
