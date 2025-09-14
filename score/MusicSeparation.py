@@ -1,7 +1,6 @@
 import torch
 import torchaudio
 from torchaudio.pipelines import HDEMUCS_HIGH_MUSDB
-from torchaudio.models import hdemucs_high
 from psutil import virtual_memory
 import subprocess
 import os
@@ -9,34 +8,67 @@ import soundfile as sf
 import tkinter as tk
 from tkinter import filedialog
 import whisper
+from torchaudio.transforms import Fade
+
 class MusicSeparation:
     def __init__(self):
         self.sources = None
         self.waveform = None
+
     @staticmethod
-    def run_separation(audio_path):
+    def _separate_sources(model, mix, sample_rate, device, segment=15.0, overlap=0.1):
+        """
+        分段執行音源分離，避免一次丟整首造成爆顯存
+        """
+        batch, channels, length = mix.shape
+
+        chunk_len = int(sample_rate * segment * (1 + overlap))
+        start = 0
+        end = chunk_len
+        overlap_frames = int(overlap * sample_rate)
+        fade = Fade(fade_in_len=0, fade_out_len=overlap_frames, fade_shape="linear")
+
+        final = torch.zeros(batch, len(model.sources), channels, length, device=device)
+
+        while start < length - overlap_frames:
+            chunk = mix[:, :, start:end]
+            with torch.no_grad():
+                out = model.forward(chunk)
+            out = fade(out)
+            final[:, :, :, start:end] += out
+
+            if start == 0:
+                fade.fade_in_len = overlap_frames
+                start += chunk_len - overlap_frames
+            else:
+                start += chunk_len
+            end += chunk_len
+            if end >= length:
+                fade.fade_out_len = 0
+
+        return final
+
+    @staticmethod
+    def run_separation(audio_path, segment = 15.0, use_cuda = True):
         #嘗試載入模型
         try:
             bundle = HDEMUCS_HIGH_MUSDB
-            #bundle = DEMUCS_HTDEMOS
             model = bundle.get_model()
         except Exception as e:
             return e
 
+        #如果有NVIDIA顯卡且顯存足夠則使用cuda，否則用CPU
         try:
-            #如果有NVIDIA顯卡且顯存足夠則使用cuda，否則用CPU
-            GPUmem = torch.cuda.mem_get_info()[1]
-            GPUmem = GPUmem /1024 / 1024 / 1024
-            SYSmem = virtual_memory().total /1024 / 1024 / 1024 / 2
-            if torch.cuda.is_available() and SYSmem + GPUmem > 16:
+            GPUmem = torch.cuda.mem_get_info()[1] / 1024 / 1024 / 1024
+            SYSmem = virtual_memory().total / 1024 / 1024 / 1024 / 2
+            if torch.cuda.is_available() and GPUmem >= 2 and use_cuda:
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
             model = model.to(device)
 
             #取得音樂檔案
-            
-            input_file = audio_path.strip('"')#"download\Haruhikage (春日影)  - MyGO!!!!! x CRYCHIC Mashup.m4a"
+            input_file = audio_path.strip('"')
             if not os.path.exists(input_file):
                 return f"找不到輸入檔案：{input_file}"
 
@@ -44,7 +76,6 @@ class MusicSeparation:
             #如果檔案格式為wav
             if ext == '.wav':
                 waveform, sample_rate = torchaudio.load(input_file)
-
             #否則ffmpeg轉檔
             else:
                 temp_wav = "temp_convert.wav"
@@ -52,16 +83,15 @@ class MusicSeparation:
                     subprocess.run([
                         "ffmpeg", "-y", "-i", input_file, "-acodec", "pcm_s16le", "-ar", "44100", temp_wav
                     ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
                     #用soundfile讀temp wav
                     data, sample_rate = sf.read(temp_wav, dtype='float32')
                     if data.ndim == 1:
                         data = data[:, None]
                     waveform = torch.from_numpy(data.T)
-                
                 #如果ffmpeg轉檔失敗
                 except subprocess.CalledProcessError as ffmpeg_err:
                     return ffmpeg_err
+                #完成刪檔案
                 finally:
                     if os.path.exists(temp_wav):
                         os.remove(temp_wav)
@@ -70,25 +100,19 @@ class MusicSeparation:
             if sample_rate != bundle.sample_rate:
                 resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=bundle.sample_rate)
                 waveform = resampler(waveform)
+                sample_rate = bundle.sample_rate
 
             waveform = waveform.to(device)
-            
-            #開始執行分離
-            with torch.no_grad():
-                try:
-                    sources = model(waveform.unsqueeze(0))[0]
-                #如果顯存不足改CPU跑
-                except RuntimeError as oom_error:
-                    if 'out of memory' in str(oom_error).lower() and device.type == 'cuda':
-                        print("GPU 記憶體不足，切換到 CPU 重跑...")
-                        torch.cuda.empty_cache()
-                        device = torch.device('cpu')
-                        model = model.to(device)
-                        waveform = waveform.to(device)
-                        sources = model(waveform.unsqueeze(0))[0]
-                    else:
-                        raise oom_error
-            
+
+            #使用分段方式做分離(overlap=0.1)
+            sources = MusicSeparation._separate_sources(
+                model=model,
+                mix=waveform.unsqueeze(0),
+                segment = segment,
+                sample_rate=sample_rate,
+                device=device
+            )[0]
+
             #取得輸出路徑及建立資料夾
             base_name = os.path.splitext(os.path.basename(input_file))[0]
             output_dir = os.path.join(os.getcwd(), "score/output", base_name)
@@ -97,38 +121,40 @@ class MusicSeparation:
             #混音(Bass、Drum、Other)
             other_mix = sources[0] + sources[1] + sources[2]
             vocals = sources[3]
-            
-            #存檔
-            torchaudio.save(os.path.join(output_dir, base_name + '-vocals.wav'), vocals.cpu(), bundle.sample_rate)
-            torchaudio.save(os.path.join(output_dir, base_name + '-other.wav'), other_mix.cpu(), bundle.sample_rate)
-            
+
+            #音檔儲存
+            torchaudio.save(os.path.join(output_dir, base_name + '-vocals.wav'), vocals.cpu(), sample_rate)
+            torchaudio.save(os.path.join(output_dir, base_name + '-other.wav'), other_mix.cpu(), sample_rate)
+
             #輸出儲存位置
             print(f"已儲存：{os.path.join(output_dir, base_name + '-vocals.wav')}")
             print(f"已儲存：{os.path.join(output_dir, base_name + '-other.wav')}")
-            
+
             #清空顯存及暫存資料
             del sources
             del waveform
             torch.cuda.empty_cache()
-            
-            output = [f"{os.path.join(output_dir, base_name + '-other.wav')}",f"{os.path.join(output_dir, base_name + '-vocals.wav')}"]
 
+            output = [
+                f"{os.path.join(output_dir, base_name + '-other.wav')}",
+                f"{os.path.join(output_dir, base_name + '-vocals.wav')}"
+            ]
             return output
-        
+
         #如果有錯誤
         except Exception as e:
             #嘗試刪除暫存音樂
             try:
-                if sources is not None:
+                if 'sources' in locals():
                     del sources
-                if waveform is not None:
+                if 'waveform' in locals():
                     del waveform
             except:
                 pass
-                
             #清顯存
             torch.cuda.empty_cache()
             return e
+
         
     #ASR辨識
     #---ASR辨識---
