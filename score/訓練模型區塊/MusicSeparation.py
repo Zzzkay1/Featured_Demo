@@ -6,8 +6,6 @@ import subprocess
 import os
 import soundfile as sf
 import tkinter as tk
-from tkinter import filedialog
-import whisper
 from torchaudio.transforms import Fade
 
 class MusicSeparation:
@@ -160,6 +158,9 @@ class MusicSeparation:
     #---ASR辨識---
     @staticmethod
     def run_ASR(audio="" ,Input_language = ""):
+        import whisper
+        from tkinter import filedialog
+        
         #建立Tk主視窗，但隱藏
         root = tk.Tk()
         root.withdraw()

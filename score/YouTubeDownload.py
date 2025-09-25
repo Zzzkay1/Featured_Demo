@@ -130,15 +130,15 @@ class YouTubeDownload:
             output_path = f"{video_path.rsplit('.', 1)[0]}_merged.mp4"
         try:
             cmd = [
-                "ffmpeg",
-                "-i", video_path,
-                "-i", audio_path,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-strict", "experimental",
-                output_path,
-                "-y"
-            ]
+            "ffmpeg",
+            "-i", video_path,
+            "-i", audio_path,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-q:a", "0",   # VBR: 0 = 最佳音質
+            "-y",
+            output_path
+        ]
             subprocess.run(cmd, check=True)
             return f'"{output_path}"'
         except Exception as e:

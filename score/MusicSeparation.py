@@ -6,8 +6,6 @@ import subprocess
 import os
 import soundfile as sf
 import tkinter as tk
-from tkinter import filedialog
-import whisper
 from torchaudio.transforms import Fade
 
 class MusicSeparation:
@@ -59,13 +57,22 @@ class MusicSeparation:
 
         #如果有NVIDIA顯卡且顯存足夠則使用cuda，否則用CPU
         try:
-            GPUmem = torch.cuda.mem_get_info()[1] / 1024 / 1024 / 1024
+            if torch.cuda.is_available():
+                GPUmem = torch.cuda.mem_get_info()[1] / 1024 / 1024 / 1024
+                if GPUmem < 1:
+                    segment = 5
+                elif GPUmem <= 2:
+                    segment = 8
+                elif GPUmem <= 4:
+                    segment = 12
             SYSmem = virtual_memory().total / 1024 / 1024 / 1024 / 2
-            if torch.cuda.is_available() and GPUmem >= 2 and use_cuda:
+            if torch.cuda.is_available() and use_cuda:
                 device = torch.device("cuda")
             else:
                 device = torch.device("cpu")
             model = model.to(device)
+
+            
 
             #取得音樂檔案
             input_file = audio_path.strip('"')
@@ -160,6 +167,9 @@ class MusicSeparation:
     #---ASR辨識---
     @staticmethod
     def run_ASR(audio="" ,Input_language = ""):
+        import whisper
+        from tkinter import filedialog
+        
         #建立Tk主視窗，但隱藏
         root = tk.Tk()
         root.withdraw()
