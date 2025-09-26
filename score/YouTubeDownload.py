@@ -1,5 +1,6 @@
 from bs4 import BeautifulSoup
 from pytubefix import YouTube
+import pytubefix
 import os
 import subprocess
 import re
@@ -29,8 +30,8 @@ class YouTubeDownload:
             except Exception as e:
                 return f"錯誤：{e}"
         elif mode == "playlist":
-            for audio in video_url.videos:
-                temp = []
+            temp = []
+            for audio in pytubefix.Playlist(video_url):
                 try:
                     yt = YouTube(audio)
                     title = YouTubeDownload.sanitize_filename(yt.title)
@@ -67,8 +68,8 @@ class YouTubeDownload:
             except Exception as e:
                 return f"錯誤：{e}"
         elif mode == "playlist":
-            for video in video_url.videos:
-                temp = []
+            temp = []
+            for video in pytubefix.Playlist(video_url):
                 try:
                     yt = YouTube(video)
                     title = YouTubeDownload.sanitize_filename(yt.title)
@@ -138,7 +139,7 @@ class YouTubeDownload:
             "-q:a", "0",   # VBR: 0 = 最佳音質
             "-y",
             output_path
-        ]
+            ]
             subprocess.run(cmd, check=True)
             return f'"{output_path}"'
         except Exception as e:
