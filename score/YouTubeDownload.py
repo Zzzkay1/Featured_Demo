@@ -1,11 +1,8 @@
-from bs4 import BeautifulSoup
 from pytubefix import YouTube
 import pytubefix
 import os
 import subprocess
 import re
-def __init__():
-    from .import YouTubeDownload
 
 class YouTubeDownload:
     def __init__(self):
@@ -117,12 +114,12 @@ class YouTubeDownload:
             with open(f"download/{filename}", "w", encoding="utf-8") as f:
                 f.write(srt_captions)
 
-            return os.path.join("/download",filename)
+            return os.path.join("download", filename)
 
         except Exception as e:
             return f"錯誤：{e}"
 
-
+    @staticmethod
     def merge_video_audio(video_path, audio_path, output_path = ""):
         video_path = video_path.strip('"')
         audio_path = audio_path.strip('"')
@@ -136,7 +133,7 @@ class YouTubeDownload:
             "-i", audio_path,
             "-c:v", "copy",
             "-c:a", "aac",
-            "-q:a", "0",   # VBR: 0 = 最佳音質
+            "-q:a", "0",   #VBR:0=最佳音質
             "-y",
             output_path
             ]
@@ -144,3 +141,33 @@ class YouTubeDownload:
             return f'"{output_path}"'
         except Exception as e:
             return f"合併失敗：{e}"
+        
+if __name__ == "__main__":
+    while True:
+        url = input("輸入格式為:Youtube連結 audio|video single|playlist):").split()
+        if url[2] == "single":
+            if url[1] == "audio":
+                temp = YouTubeDownload.download_youtube_audio(url[0])
+            elif url[1] == "video":
+                tempAudio = YouTubeDownload.download_youtube_audio(url[0])
+                tempVideo = YouTubeDownload.download_youtube_video(url[0])
+                temp = YouTubeDownload.merge_video_audio(video_path=tempVideo, audio_path=tempAudio)
+            print(f"檔案存於{temp}")
+        elif url[2] == "playlist":
+                if url[1] == "audio":
+                    temp = YouTubeDownload.download_youtube_audio(url[0],mode="playlist")
+                    for i in temp:
+                        print(f"檔案存於{i}")
+                elif url[1] == "video":
+                    tempAudio = YouTubeDownload.download_youtube_audio(url[0],mode="playlist")
+                    tempVideo = YouTubeDownload.download_youtube_video(url[0],mode="playlist")
+                    for i in range(len(tempAudio)):
+                        temp = YouTubeDownload.merge_video_audio(video_path=tempVideo[i], audio_path=tempAudio[i])
+                        print(f"檔案存於{temp}")
+        else:
+            print("輸入格式有誤")
+        isContinue = input("是否繼續(Y/N):")
+        if isContinue == "Y" or isContinue == "y":
+            pass
+        elif isContinue == "N" or isContinue == "n":
+            break
