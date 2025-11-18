@@ -6,7 +6,7 @@
 |歌曲儲存(可選)|1|||
 |QT|0.5|不會||
 |讀取本地歌曲|1|||
-|可攜帶Python|1||https://winpython.github.io/|
+|可攜帶Python|1|winpython|https://winpython.github.io/|  
 |進度條|0|工具沒回傳值，之後改轉圈||
 |佇列|0|沒時間||
 |網頁|0.3|暫時隨便用一個測試||
