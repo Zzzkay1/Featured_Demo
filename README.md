@@ -6,11 +6,11 @@
 |歌曲儲存(可選)|1|||
 |QT|0.5|不會||
 |讀取本地歌曲|1|||
-|可攜帶Python|1||https://winpython.github.io/|
+|可攜帶Python|1|winpython|https://winpython.github.io/|  
 |進度條|0|工具沒回傳值，之後改轉圈||
 |佇列|0|沒時間||
-|網頁|0|沒時間||
-|歌詞辨識|0|還沒學||
+|網頁|0.3|暫時隨便用一個測試||
+|歌詞辨識|0|Whisper|https://huggingface.co/openai/whisper-small|
 |畫面輸出|0|沒時間||
 # 專題下載
 |專題可執行檔共用連結|
