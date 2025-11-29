@@ -1,8 +1,10 @@
+from bs4 import BeautifulSoup
 from pytubefix import YouTube
 import pytubefix
 import os
 import subprocess
 import re
+from pytubefix.exceptions import VideoUnavailable, RegexMatchError
 
 class YouTubeDownload:
     def __init__(self):
@@ -12,8 +14,36 @@ class YouTubeDownload:
         #移除檔名中不合法的字元
         return re.sub(r'[\\/:*?"<>|]', '_', name)
     @staticmethod
-    def download_youtube_audio(video_url, mode = "audio"):
+    def check_YouTube_available(url: str) -> bool:
+        try:
+            # 加入 use_oauth=True 增加通過率，避免被當成機器人
+            # allow_oauth_cache=True 會在本地儲存驗證資訊，不用每次都驗證
+            yt = YouTube(url)
+            
+            # 1. 檢查影片是否因版權、區域限制而無法播放
+            yt.check_availability()
+            
+            # 2. 嘗試讀取標題，確認 Metadata 解析正常 (這會觸發網路請求)
+            if yt.title:
+                return True
+                
+        except VideoUnavailable:
+            print(f"影片無法使用 (被下架或私人影片): {url}")
+            return False
+        except RegexMatchError:
+            print(f"網址格式錯誤或解析失敗: {url}")
+            return False
+        except Exception as e:
+            # 捕捉其他非預期的錯誤 (如網路斷線)
+            print(f"檢查時發生未預期錯誤: {e}")
+            return False
+        print("未知錯誤")
+        return False
+    @staticmethod
+    def download_youtube_audio(video_url:str|list, mode = "audio")->str|list:
         if mode == "audio" :
+            if (YouTubeDownload.check_YouTube_available(video_url)==False):
+                return None
             try:
                 yt = YouTube(video_url)
                 title = YouTubeDownload.sanitize_filename(yt.title)
@@ -25,10 +55,13 @@ class YouTubeDownload:
 
                 return f'"{m4a_path}"'
             except Exception as e:
-                return f"錯誤：{e}"
+                raise e
         elif mode == "playlist":
             temp = []
             for audio in pytubefix.Playlist(video_url):
+                if (YouTubeDownload.check_YouTube_available(audio)==False):
+                    temp.append(None)
+                    continue
                 try:
                     yt = YouTube(audio)
                     title = YouTubeDownload.sanitize_filename(yt.title)
@@ -39,12 +72,14 @@ class YouTubeDownload:
                     temp.append(audio_stream.download(output_path="download", filename=f"{title}.m4a"))
                     
                 except Exception as e:
-                    temp.append(f"錯誤：{e}")
+                    raise e
             return temp
         
     @staticmethod
-    def download_youtube_video(video_url, mode="video"):
+    def download_youtube_video(video_url:str|list, mode="video")->str|list|None:
         if mode == "video":
+            if (YouTubeDownload.check_YouTube_available(video_url)==False):
+                return None
             try:
                 yt = YouTube(video_url)
                 title = YouTubeDownload.sanitize_filename(yt.title)
@@ -55,7 +90,7 @@ class YouTubeDownload:
                 if not video_stream:
                     video_stream = yt.streams.filter(mime_type="video/mp4").order_by("resolution").desc().first()
                 if not video_stream:
-                    return "找不到合適的視訊串流"
+                    raise ValueError("找不到合適的視訊串流")
 
                 os.makedirs("download", exist_ok=True)
                 os.path.join("download", f"{title}.mp4")
@@ -63,10 +98,13 @@ class YouTubeDownload:
 
                 return f'"{video_path}"'
             except Exception as e:
-                return f"錯誤：{e}"
+                raise e
         elif mode == "playlist":
             temp = []
             for video in pytubefix.Playlist(video_url):
+                if (YouTubeDownload.check_YouTube_available(video)==False):
+                    temp.append(None)
+                    continue
                 try:
                     yt = YouTube(video)
                     title = YouTubeDownload.sanitize_filename(yt.title)
@@ -85,12 +123,18 @@ class YouTubeDownload:
 
                     temp.append(f'"{video_path}"')
                 except Exception as e:
-                    temp.append(f"錯誤：{e}")
+                    raise e
             return temp
-    
+    @staticmethod
+    def get_YouTube_captions_languageCode(url:str)->list|None:
+        if (YouTubeDownload.check_YouTube_available(url)):
+            yt = YouTube(url)
+            return list(yt.captions.keys())
+        else:
+            return None
 
     @staticmethod
-    def download_captions_by_language_code(video_url, language_code):
+    def download_captions_by_language_code(video_url:str|list, language_code:str|None)->str:
         try:
             yt = YouTube(video_url)
             title = YouTubeDownload.sanitize_filename(yt.title)
@@ -114,13 +158,13 @@ class YouTubeDownload:
             with open(f"download/{filename}", "w", encoding="utf-8") as f:
                 f.write(srt_captions)
 
-            return os.path.join("download", filename)
+            return os.path.join("/download",filename)
 
         except Exception as e:
-            return f"錯誤：{e}"
+            raise e
 
-    @staticmethod
-    def merge_video_audio(video_path, audio_path, output_path = ""):
+
+    def merge_video_audio(video_path:str, audio_path:str, output_path = "")->str:
         video_path = video_path.strip('"')
         audio_path = audio_path.strip('"')
         output_path = output_path.strip('"')
@@ -128,46 +172,16 @@ class YouTubeDownload:
             output_path = f"{video_path.rsplit('.', 1)[0]}_merged.mp4"
         try:
             cmd = [
-            "ffmpeg",
-            "-i", video_path,
-            "-i", audio_path,
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-q:a", "0",   #VBR:0=最佳音質
-            "-y",
-            output_path
-            ]
+                "ffmpeg",
+                "-i", video_path,
+                "-i", audio_path,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-q:a", "0",
+                "-y",
+                output_path
+                ]
             subprocess.run(cmd, check=True)
             return f'"{output_path}"'
         except Exception as e:
-            return f"合併失敗：{e}"
-        
-if __name__ == "__main__":
-    while True:
-        url = input("輸入格式為:Youtube連結 audio|video single|playlist):").split()
-        if url[2] == "single":
-            if url[1] == "audio":
-                temp = YouTubeDownload.download_youtube_audio(url[0])
-            elif url[1] == "video":
-                tempAudio = YouTubeDownload.download_youtube_audio(url[0])
-                tempVideo = YouTubeDownload.download_youtube_video(url[0])
-                temp = YouTubeDownload.merge_video_audio(video_path=tempVideo, audio_path=tempAudio)
-            print(f"檔案存於{temp}")
-        elif url[2] == "playlist":
-                if url[1] == "audio":
-                    temp = YouTubeDownload.download_youtube_audio(url[0],mode="playlist")
-                    for i in temp:
-                        print(f"檔案存於{i}")
-                elif url[1] == "video":
-                    tempAudio = YouTubeDownload.download_youtube_audio(url[0],mode="playlist")
-                    tempVideo = YouTubeDownload.download_youtube_video(url[0],mode="playlist")
-                    for i in range(len(tempAudio)):
-                        temp = YouTubeDownload.merge_video_audio(video_path=tempVideo[i], audio_path=tempAudio[i])
-                        print(f"檔案存於{temp}")
-        else:
-            print("輸入格式有誤")
-        isContinue = input("是否繼續(Y/N):")
-        if isContinue == "Y" or isContinue == "y":
-            pass
-        elif isContinue == "N" or isContinue == "n":
-            break
+            raise f"合併失敗：{e}"

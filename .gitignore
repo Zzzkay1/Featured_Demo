@@ -120,6 +120,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+*.pyc
 .env
 .venv
 env/
@@ -158,3 +159,23 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+*.pyc
+.env
+venv/
+env/
+.vscode/
+*.bat
+*.mp4
+*.wav
+score/訓練模型區塊/
+score/whisper-small-zh/
+score/processed_songs/
+output/
+score/output/
+score/music/
+score/openai/
+download/
+score/download/
+*.exe
+import.txt
+WPy64-31180/

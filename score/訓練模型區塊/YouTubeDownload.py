@@ -4,8 +4,6 @@ import pytubefix
 import os
 import subprocess
 import re
-def __init__():
-    from .import YouTubeDownload
 
 class YouTubeDownload:
     def __init__(self):
@@ -15,7 +13,19 @@ class YouTubeDownload:
         #移除檔名中不合法的字元
         return re.sub(r'[\\/:*?"<>|]', '_', name)
     @staticmethod
-    def download_youtube_audio(video_url, mode = "audio"):
+    def check_YouTube_available(url) -> bool:
+        try:
+            yt = YouTube(url)
+            yt.check_availability()
+            if yt.title:
+                return True
+        except(pytubefix.VideoUnavailable, pytubefix.RegexMatchError):
+            return False
+        except Exception as e:
+            print(f"檢查 YouTube 連結時發生未預期的錯誤: {e}")
+            return False
+    @staticmethod
+    def download_youtube_audio(video_url:str|list, mode = "audio")->str|list:
         if mode == "audio" :
             try:
                 yt = YouTube(video_url)
@@ -46,7 +56,7 @@ class YouTubeDownload:
             return temp
         
     @staticmethod
-    def download_youtube_video(video_url, mode="video"):
+    def download_youtube_video(video_url:str|list, mode="video")->str|list:
         if mode == "video":
             try:
                 yt = YouTube(video_url)
@@ -93,7 +103,7 @@ class YouTubeDownload:
     
 
     @staticmethod
-    def download_captions_by_language_code(video_url, language_code):
+    def download_captions_by_language_code(video_url:str|list, language_code)->str:
         try:
             yt = YouTube(video_url)
             title = YouTubeDownload.sanitize_filename(yt.title)
