@@ -13,7 +13,7 @@ from datetime import datetime
 #--- 1. 模擬環境與模組匯入 ---
 try:
     from YouTubeDownload import YouTubeDownload
-    from MusicSeparation import MusicSeparation
+    from MusicTools import MusicTools
 except ImportError as e:
     print(f"模組匯入警告: {e}")
 
@@ -59,7 +59,7 @@ def parse_srt(srt_path):
             "text": clean_text
         })
     return subtitles
-
+#轉碼影片
 def get_video_base64(video_path):
     try:
         with open(video_path, "rb") as f:
@@ -68,13 +68,14 @@ def get_video_base64(video_path):
     except FileNotFoundError:
         return ""
 
+#取得輸出資料夾內檔案
 def get_processed_files(output_dir):
     if not os.path.exists(output_dir):
         return []
     files = glob.glob(os.path.join(output_dir, "*.mp4"))
     files.sort(key=os.path.getmtime, reverse=True)
     return [os.path.basename(f) for f in files]
-
+#清除輸出資料夾
 def clear_output_folder(output_dir):
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
@@ -90,37 +91,55 @@ class TaskManager:
         self.status_message = ""
         self.lock = threading.Lock()
 
-    def start_task(self, url, output_dir):
+    #輸入網址開始執行
+    def start_task(self, url, output_dir, pitch_steps=0):
         with self.lock:
             if self.is_processing:
                 return False
             
             self.is_processing = True
             self.current_task_url = url
-            self.status_message = "🚀 啟動處理程序..."
+            self.status_message = "啟動處理程序..."
             
-            thread = threading.Thread(target=self._worker, args=(url, output_dir))
+            thread = threading.Thread(target=self._worker, args=(url, output_dir, pitch_steps))
             thread.daemon = True
             thread.start()
             return True
-
-    def _worker(self, url, output_dir):
+    
+    #開始執行的具體步驟
+    def _worker(self, url, output_dir, pitch_steps):
         if (not(YouTubeDownload.check_YouTube_available(url))):
             self.status_message = "連結輸入錯誤或網路不可用"
             return
         try:
-            self.status_message = "⬇️ 下載 YouTube 音訊與視訊..."
+            self.status_message = "下載 YouTube 音訊與視訊..."
             audio = YouTubeDownload.download_youtube_audio(url)
             video = YouTubeDownload.download_youtube_video(url)
             
-            self.status_message = "✂️ 進行人聲分離..."
-            separation = MusicSeparation.run_separation(audio)
-            
-            self.status_message = "🎬 合併影片與音訊..."
-            merge = YouTubeDownload.merge_video_audio(video, separation[0])
+            self.status_message = "進行人聲分離..."
+            separation = MusicTools.run_separation(audio)
 
-            self.status_message = "📝 Whisper 歌詞辨識中..."
-            AsrReturn = MusicSeparation.run_ASR(separation[1])
+            target_audio = separation[0] 
+            
+            #--- 變調處理 ---
+            if pitch_steps != 0:
+                self.status_message = f"進行升降調處理({pitch_steps}半音)..."
+                
+                #定義變調後的檔名
+                path_parts = os.path.splitext(target_audio)
+                shifted_audio_path = f"{path_parts[0]}_pitch{pitch_steps}{path_parts[1]}"
+                
+                #FFmpeg變調
+                target_audio = MusicTools.change_pitch_ffmpeg(target_audio, pitch_steps)
+            #-----------------------------------
+
+            self.status_message = "合併影片與音訊..."
+
+            #使用變調後的音訊進行合併
+            merge = YouTubeDownload.merge_video_audio(video, target_audio)
+
+            self.status_message = "Whisper 歌詞辨識中..."
+            AsrReturn = MusicTools.run_ASR(separation[1])
             
             srt_source_path = None
             if AsrReturn and len(AsrReturn) > 0:
@@ -130,15 +149,21 @@ class TaskManager:
             merge = merge.strip('"').strip("'")
             safe_name = os.path.basename(merge).replace("／", "_").replace("/", "_").replace("\\", "_")
             safe_name = re.sub(r'[\\/*?:"<>|]', "", safe_name)
-            
+
             final_name_base = os.path.splitext(safe_name)[0]
             file_extension = os.path.splitext(safe_name)[1] if os.path.splitext(safe_name)[1] else ".mp4"
 
+            #加上升降調數字
+            final_name_base = f"{final_name_base}_{pitch_steps}"
+            safe_name = f"{final_name_base}{file_extension}"
+
+            #檢查檔名是否存在，存在加時間碼
             if os.path.exists(os.path.join(output_dir, safe_name)):
                 timestamp = datetime.now().strftime("%H%M%S")
                 final_name_base = f"{final_name_base}_{timestamp}"
                 safe_name = f"{final_name_base}{file_extension}"
-
+            
+            #最終檔名
             out_video_path = os.path.join(output_dir, safe_name)
             out_srt_path = os.path.join(output_dir, f"{final_name_base}.srt")
             
@@ -154,10 +179,10 @@ class TaskManager:
                 shutil.move(srt_source_path, out_srt_path)
 
             self.last_completed_file = safe_name
-            self.status_message = f"✅ 完成：{safe_name}"
+            self.status_message = f"✓ 完成：{safe_name}"
             
         except Exception as e:
-            self.status_message = f"❌ 錯誤: {str(e)}"
+            self.status_message = f"✗ 錯誤: {str(e)}"
             print(f"Worker Error: {e}")
         finally:
             with self.lock:
@@ -168,6 +193,7 @@ task_manager = TaskManager()
 #--- 4. 介面顯示類別 ---
 
 class WebDisplay:
+    #初始化
     def __init__(self):
         self.output_dir = "output"
         os.makedirs(self.output_dir, exist_ok=True)
@@ -176,16 +202,18 @@ class WebDisplay:
             st.session_state.is_initialized = True
             st.session_state.current_playing_name = None
 
+    #左方佇列
     @st.fragment(run_every=2)
     def sidebar_queue_fragment(self):
-        st.header("📂 處理列表")
+        st.header("處理列表")
         
+        #是否執行中
         if task_manager.is_processing:
             st.info(f"{task_manager.status_message}")
             st.spinner("正在處理中...") 
-        elif task_manager.status_message and "✅" in task_manager.status_message:
+        elif task_manager.status_message and "✓" in task_manager.status_message:
             st.success(task_manager.status_message)
-        elif task_manager.status_message and "❌" in task_manager.status_message:
+        elif task_manager.status_message and "✗" in task_manager.status_message:
             st.error(task_manager.status_message)
         
         file_list = get_processed_files(self.output_dir)
@@ -193,7 +221,7 @@ class WebDisplay:
         if file_list:
             for filename in file_list:
                 is_selected = (st.session_state.current_playing_name == filename)
-                label = f"{'▶️ ' if is_selected else ''}{filename}"
+                label = f"{'▶ ' if is_selected else ''}{filename}"
                 if filename == task_manager.last_completed_file:
                     label += " (New!)"
 
@@ -204,11 +232,12 @@ class WebDisplay:
             st.caption("尚無檔案，請新增任務。")
         
         st.markdown("---")
-        if st.button("🗑️ 清除所有紀錄", use_container_width=True):
+        if st.button("清除所有紀錄", use_container_width=True):
             clear_output_folder(self.output_dir)
             st.session_state.current_playing_name = None
             st.rerun()
 
+    #主畫面
     def render(self):
         #使用 wide layout 讓左右分欄更寬敞
         st.set_page_config(layout="wide", page_title="AI 影片處理與字幕")
@@ -226,25 +255,27 @@ class WebDisplay:
         with st.sidebar:
             self.sidebar_queue_fragment()
 
-        #--- [修改區域] 頂部：放置原先的輸入框 ---
+        #--- 輸入框 ---
         #建立一個容器放在最上方
         with st.container():
             #使用 columns 稍微限縮寬度，或者直接全寬
             #這裡使用全寬讓輸入框更明顯
             with st.form("task_form"):
-                #使用 columns 讓輸入框和按鈕在同一行 (選擇性)
-                c1, c2 = st.columns([4, 1])
+                c1, c2, c3 = st.columns([6, 1, 2], vertical_alignment="bottom") # 調整欄位比例
                 with c1:
                     url_input = st.text_input("YouTube URL", placeholder="請輸入 YouTube 連結...", label_visibility="collapsed")
                 with c2:
-                    submitted = st.form_submit_button("🚀 加入背景處理", type="primary", use_container_width=True)
+                    # 新增：升降調選擇 (-6 到 +6 半音)
+                    semitones = st.number_input("升降調 (半音)", min_value=-12, max_value=12, value=0, step=1, help="正數為升調，負數為降調")
+                with c3:
+                    submitted = st.form_submit_button("加入背景處理", type="primary", use_container_width=True)
                 
                 if submitted:
                     if url_input:
                         if not task_manager.is_processing:
-                            success = task_manager.start_task(url_input, self.output_dir)
+                            success = task_manager.start_task(url_input, self.output_dir, semitones)
                             if success:
-                                st.toast("已加入排程，請留意側邊欄狀態！", icon="🏃")
+                                st.toast(f"已加入排程(變調:{semitones})，請留意側邊欄狀態！")
                             else:
                                 st.warning("任務啟動失敗。")
                         else:
@@ -254,8 +285,8 @@ class WebDisplay:
 
         st.markdown("---") #分隔線
 
-        #--- [修改區域] 下方分欄：左邊播放器，右邊歌詞 ---
-        #調整比例，例如 1.5 : 1 讓影片大一點
+        #--- 分欄:左播放器，右歌詞 ---
+        #調整比例
         col_player, col_lyrics = st.columns([1.6, 1]) 
 
         target_file = st.session_state.current_playing_name
@@ -281,9 +312,8 @@ class WebDisplay:
                 st.session_state.current_playing_name = None
                 st.rerun()
 
-        #--- 左欄：影片播放器 ---
+        #--- 左欄:影片播放器 ---
         with col_player:
-            #st.subheader("🎬 影片播放")
             if has_video:
                  #這裡呼叫拆分後的播放器 HTML (僅含影片標籤)
                 self.render_video_player_only(video_b64, subtitles_json)
@@ -307,45 +337,40 @@ class WebDisplay:
                     unsafe_allow_html=True
                 )
 
-        #--- 右欄：歌詞列表 ---
+        #--- 右欄:歌詞列表 ---
         with col_lyrics:
-            #st.subheader("動態歌詞")
             if has_video:
-                #這裡呼叫拆分後的歌詞 HTML
-                #注意：因為 Streamlit components 是 iframe 隔離的，
-                #若要讓右邊的歌詞控制左邊的影片，必須寫在同一個 HTML/JS 區塊內。
-                #**解決方案**：我們不能真的把它們拆成兩個 st.components.html，
-                #必須用 CSS Grid 或 Flexbox 在「同一個 HTML」裡排版，才能讓 JS 互通。
-                #所以下面的 render_split_layout 函式會負責產生 左右兩欄 的 HTML。
                 pass 
             else:
                 st.info("暫無歌詞資料")
 
-        #--- [關鍵] 渲染整合後的 HTML ---
-        #因為 iframe 限制，我們必須把「影片」和「歌詞」寫在同一個 components.html 裡，
-        #才能透過 JS 互相控制 (點歌詞跳轉影片)。
-        #我們使用 CSS 來模擬 Streamlit 的左右分欄效果。
+        #--- 渲染整合後的HTML ---
+        #因為iframe限制，我們必須把「影片」和「歌詞」寫在同一個components.html裡
+        #才能透過JS互相控制(點歌詞跳轉影片)
+        #我們使用CSS來模擬Streamlit的左右分欄效果
         if has_video:
-            #我們把剛剛建立的 col_player 和 col_lyrics 內容清空或當作佔位符，
-            #直接在下方渲染一個全寬的 Component，內部自己分左右。
-            #為了版面好看，我們可以把上面的 st.subheader 移除，直接寫在 HTML 裡。
+            #我們把剛剛建立的col_player和col_lyrics內容清空或當作佔位符
+            #直接在下方渲染一個全寬的Component，內部自己分左右
+            #為了版面好看，我們可以把上面的st.subheader移除，直接寫在HTML裡
             
-            #清除上面兩個 col 的暫位內容 (視覺上) - 實際上 Streamlit 無法動態刪除已渲染的元件
-            #所以上面的 col_player/lyrics 只是用來顯示標題或空狀態，
-            #當有影片時，我們改用下面這個全版元件來取代原本的分欄顯示。
+            #清除上面兩個col的暫位內容(視覺上)-實際上Streamlit無法動態刪除已渲染的元件
+            #所以上面的col_player/lyrics只是用來顯示標題或空狀態
+            #當有影片時，我們改用下面這個全版元件來取代原本的分欄顯示
             
             self.render_split_layout_player(video_b64, subtitles_json,target_file)
 
+    #已棄用
     def render_video_player_only(self, video_b64, subtitles_json):
         """
         這個函式已經被棄用，改用 render_split_layout_player。
-        因為 Streamlit Component 是 iframe，跨 iframe 無法通訊 (歌詞無法控制影片)。
+        因為 Streamlit Component 是 iframe,跨 iframe 無法通訊
         """
         pass
-
+    
+    #實際渲染函式
     def render_split_layout_player(self, video_b64, subtitles_json,target_file):
         """
-        渲染一個包含「左邊影片」和「右邊歌詞」的 HTML Component。
+        渲染一個包含「左邊影片」和「右邊歌詞」的HTML Component。
         修改為響應式高度設計。
         """
         
@@ -485,7 +510,7 @@ class WebDisplay:
                         </video>
                     </div>
                     <div class="time-display">
-                        ⏱️ <span id="timeDisplay">0.000</span> s
+                        <span id="timeDisplay">0.000</span> s
                     </div>
                 </div>
 
@@ -544,9 +569,9 @@ class WebDisplay:
             </script>
         """
         
-        #Streamlit 的 components.html 需要一個初始高度。
-        #雖然我們在 CSS 裡已經設為響應式，但這個 Python 參數決定了 iframe 挖多大的洞。
-        #設定 600~700 左右通常能適配大部分 16:9 影片在寬螢幕下的高度。
+        #Streamlit的components.html需要一個初始高度
+        #雖然我們在CSS裡已經設為響應式，但這個Python參數決定了iframe挖多大的洞
+        #設定600~700左右通常能適配大部分16:9影片在寬螢幕下的高度
         components.html(html_content, height=600, scrolling=False)
 
 if __name__ == "__main__":

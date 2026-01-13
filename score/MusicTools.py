@@ -9,22 +9,23 @@ from tkinter import filedialog
 from psutil import virtual_memory
 from torchaudio.pipelines import HDEMUCS_HIGH_MUSDB
 from torchaudio.transforms import Fade
+import time
 
-#將 transformers 移到全域引用，解決 Worker Error
+#將 transformers 移到全域引用,解決 Worker Error
 try:
     from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
 except ImportError:
     print("錯誤：找不到 transformers 套件。請執行 pip install transformers accelerate")
     raise
 
-#設定 Torchaudio 後端，解決 UserWarning (針對 Windows 環境)
+#設定 Torchaudio 後端,解決 UserWarning (針對 Windows 環境)
 if os.name == 'nt':
     try:
         torchaudio.set_audio_backend("soundfile")
     except:
-        pass #新版 torchaudio 可能不支援此語法，則依賴預設
+        pass #新版 torchaudio 可能不支援此語法,則依賴預設
 
-class MusicSeparation:
+class MusicTools:
     def __init__(self):
         self.sources = None
         self.waveform = None
@@ -32,7 +33,7 @@ class MusicSeparation:
     @staticmethod
     def _separate_sources(model, mix, sample_rate, device, segment=15.0, overlap=0.1):
         """
-        分段執行音源分離，避免一次丟整首造成爆顯存
+        分段執行音源分離,避免一次丟整首造成爆顯存
         """
         batch, channels, length = mix.shape
 
@@ -69,9 +70,9 @@ class MusicSeparation:
             bundle = HDEMUCS_HIGH_MUSDB
             model = bundle.get_model()
         except Exception as e:
-            return e
+            raise e
 
-        #如果有NVIDIA顯卡且顯存足夠則使用cuda，否則用CPU
+        #如果有NVIDIA顯卡且顯存足夠則使用cuda,否則用CPU
         try:
             if torch.cuda.is_available():
                 GPUmem = torch.cuda.mem_get_info()[1] / 1024 / 1024 / 1024
@@ -130,7 +131,7 @@ class MusicSeparation:
             waveform = waveform.to(device)
 
             #使用分段方式做分離(overlap=0.1)
-            sources = MusicSeparation._separate_sources(
+            sources = MusicTools._separate_sources(
                 model=model,
                 mix=waveform.unsqueeze(0),
                 segment = segment,
@@ -209,7 +210,7 @@ class MusicSeparation:
         audio_dir = os.path.dirname(file_path)
         filename = os.path.splitext(os.path.basename(file_path))[0]
         
-        #0. 獲取音訊總長度 (用於防呆，避免時間軸超出)
+        #0. 獲取音訊總長度 (用於防呆,避免時間軸超出)
         try:
             info = sf.info(file_path)
             audio_duration = info.duration
@@ -222,12 +223,12 @@ class MusicSeparation:
         target_file_for_asr = file_path #預設為原檔
 
         try:
-            #(VAD 載入與處理邏輯同前，省略以節省篇幅...)
-            #這裡假設你的 VAD 程式碼正常運作，並生成了 processed_file_path
+            #(VAD 載入與處理邏輯同前,省略以節省篇幅...)
+            #這裡假設你的 VAD 程式碼正常運作,並生成了 processed_file_path
             #如果 VAD 成功:
             #target_file_for_asr = processed_file_path
             
-            #--- 以下為簡化的 VAD 邏輯示意，請保留你原本完整的 VAD 區塊 ---
+            #--- 以下為簡化的 VAD 邏輯示意,請保留你原本完整的 VAD 區塊 ---
             vad_model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, onnx=False)
             (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
             wav = read_audio(file_path, sampling_rate=16000)
@@ -240,9 +241,9 @@ class MusicSeparation:
                 target_file_for_asr = processed_file_path #★關鍵修正：確認使用處理過的檔案
                 print(f"使用 VAD 處理後的檔案進行辨識: {target_file_for_asr}")
             else:
-                print("VAD 未偵測到人聲，使用原檔。")
+                print("VAD 未偵測到人聲,使用原檔。")
         except Exception as e:
-            print(f"VAD 失敗，使用原檔: {e}")
+            print(f"VAD 失敗,使用原檔: {e}")
 
         #--- 模型載入 ---
         tempmodel = "Zzzkay1/whisper-small-zh" 
@@ -271,11 +272,11 @@ class MusicSeparation:
         generate_kwargs = {
             "task": "transcribe",
             "language": "zh",
-            "repetition_penalty": 1.2,    #稍微降低一點，太高有時會導致跳字
+            "repetition_penalty": 1.2,    #稍微降低一點,太高有時會導致跳字
             "no_speech_threshold": 0.3,   #提高對靜音的敏感度
             "condition_on_prev_tokens": False, #★★★ 最重要：設為 False 防止依賴前句產生的死循環
-            "compression_ratio_threshold": 1.35, #如果壓縮率太高(代表文字一直重複)，則捨棄該段
-            "temperature": 0.2, #給一點點隨機性，避免陷入決定性的死路
+            "compression_ratio_threshold": 1.35, #如果壓縮率太高(代表文字一直重複),則捨棄該段
+            "temperature": 0.2, #給一點點隨機性,避免陷入決定性的死路
             "logprob_threshold": -1.0, 
         }
 
@@ -305,10 +306,10 @@ class MusicSeparation:
                 if start is None: continue
                 if end is None: end = start + 2.0
 
-                #2. ★硬性檢查：如果開始時間超過音訊總長，直接結束迴圈
+                #2. ★硬性檢查：如果開始時間超過音訊總長,直接結束迴圈
                 if start > audio_duration:
                     break
-                #如果結束時間超過總長，修正為總長
+                #如果結束時間超過總長,修正為總長
                 if end > audio_duration:
                     end = audio_duration
 
@@ -411,15 +412,15 @@ class MusicSeparation:
             #讀取完整音訊
             wav = read_audio(file_path, sampling_rate=16000)
             
-            #★ 參數調整：確保不要切太碎，也不要太長
+            #★ 參數調整：確保不要切太碎,也不要太長
             speech_timestamps = get_speech_timestamps(
                 wav, 
                 vad_model, 
                 threshold=0.4,          #適中的閾值
                 sampling_rate=16000, 
                 min_speech_duration_ms=250, 
-                min_silence_duration_ms=300, #稍微縮短，讓斷句更頻繁
-                speech_pad_ms=100       #減少 padding，避免吃到前後雜訊
+                min_silence_duration_ms=300, #稍微縮短,讓斷句更頻繁
+                speech_pad_ms=100       #減少 padding,避免吃到前後雜訊
             )
         except Exception as e:
             print(f"VAD 失敗: {e}")
@@ -427,7 +428,7 @@ class MusicSeparation:
 
         #--- 3. 手動切割並逐段辨識 (解決死循環的關鍵) ---
         segments_for_output = []
-        print(f"共偵測到 {len(speech_timestamps)} 個語音片段，開始逐段辨識...")
+        print(f"共偵測到 {len(speech_timestamps)} 個語音片段,開始逐段辨識...")
 
         #獲取 input_features 的輔助函式
         def transcribe_segment(segment_waveform):
@@ -444,9 +445,9 @@ class MusicSeparation:
                 predicted_ids = model.generate(
                     input_features,
                     forced_decoder_ids=forced_decoder_ids,
-                    max_new_tokens=250,      #限制單句最大長度，防止無限輸出
+                    max_new_tokens=250,      #限制單句最大長度,防止無限輸出
                     no_repeat_ngram_size=3,  #輕微防止重複 (比 repetition_penalty 溫和)
-                    temperature=0.2,         #給一點點彈性，避免死路
+                    temperature=0.2,         #給一點點彈性,避免死路
                     do_sample=True,          #允許採樣
                     top_k=50,                #限制採樣範圍
                 )
@@ -466,7 +467,7 @@ class MusicSeparation:
             #提取這一段的音訊 (Tensor)
             segment_wav = wav[start_sample:end_sample]
             
-            #如果片段太短(<0.2s)，直接跳過
+            #如果片段太短(<0.2s),直接跳過
             if (end_time - start_time) < 0.2:
                 continue
 
@@ -513,7 +514,7 @@ class MusicSeparation:
                 f.write(f"{format_time_srt(seg['start'])} --> {format_time_srt(seg['end'])}\n")
                 f.write(f"{seg['text']}\n\n")
 
-        print(f"辨識完成，已輸出 SRT: {srt_path}")
+        print(f"辨識完成,已輸出 SRT: {srt_path}")
 
         #--- 清理 ---
         del model
@@ -526,7 +527,7 @@ class MusicSeparation:
         torch.cuda.empty_cache()
 
         return [srt_path, "zh"]"""
-    #不能跑，超爛
+    #不能跑,超爛
     """@staticmethod
     def run_ASR(audio="", Input_language=""):
         import torch
@@ -594,7 +595,7 @@ class MusicSeparation:
             
             wav = read_audio(file_path, sampling_rate=16000)
             
-            #這裡我們放寬一點，讓 VAD 盡量抓，後面我們會手動強制切
+            #這裡我們放寬一點,讓 VAD 盡量抓,後面我們會手動強制切
             speech_timestamps = get_speech_timestamps(
                 wav, 
                 vad_model, 
@@ -610,7 +611,7 @@ class MusicSeparation:
 
         #--- 3. 處理與辨識 (Micro-Chunking) ---
         segments_for_output = []
-        print(f"VAD 初步切出 {len(speech_timestamps)} 個片段，正在進行長度檢查與辨識...")
+        print(f"VAD 初步切出 {len(speech_timestamps)} 個片段,正在進行長度檢查與辨識...")
 
         temp_segment_file = os.path.join(audio_dir, "temp_segment_processing.wav")
 
@@ -628,18 +629,18 @@ class MusicSeparation:
 
         final_chunks_to_process = []
 
-        #第一階段：預處理時間戳，把過長的切短
+        #第一階段：預處理時間戳,把過長的切短
         for stamp in speech_timestamps:
             start_sample = stamp['start']
             end_sample = stamp['end']
             duration_sec = (end_sample - start_sample) / 16000
 
             if duration_sec <= MAX_CHUNK_DURATION:
-                #如果長度 OK，直接加入
+                #如果長度 OK,直接加入
                 final_chunks_to_process.append((start_sample, end_sample))
             else:
-                #如果太長，強制切分成多段
-                #print(f"發現超長片段 ({duration_sec:.2f}s)，進行強制切分...")
+                #如果太長,強制切分成多段
+                #print(f"發現超長片段 ({duration_sec:.2f}s),進行強制切分...")
                 num_sub_chunks = math.ceil(duration_sec / MAX_CHUNK_DURATION)
                 chunk_samples = int(MAX_CHUNK_DURATION * 16000)
                 
@@ -654,7 +655,7 @@ class MusicSeparation:
                     final_chunks_to_process.append((sub_start, sub_end))
 
         #第二階段：開始辨識
-        print(f"長度檢查完成，共需處理 {len(final_chunks_to_process)} 個微片段。")
+        print(f"長度檢查完成,共需處理 {len(final_chunks_to_process)} 個微片段。")
 
         for idx, (start_sample, end_sample) in enumerate(final_chunks_to_process):
             
@@ -672,7 +673,7 @@ class MusicSeparation:
             #辨識
             try:
                 #★ return_timestamps=False 避開 logprobs bug
-                #★ 因為我們強制切到 25s 以下，所以不會觸發 >30s bug
+                #★ 因為我們強制切到 25s 以下,所以不會觸發 >30s bug
                 result = pipe(
                     temp_segment_file,
                     return_timestamps=False, 
@@ -680,7 +681,7 @@ class MusicSeparation:
                 )
                 text = result['text'].strip()
             except Exception as e:
-                #如果真的還是失敗，就印出來但不要中斷整個程式
+                #如果真的還是失敗,就印出來但不要中斷整個程式
                 print(f"片段辨識略過 ({vad_start_time:.1f}s): {e}")
                 continue
 
@@ -719,7 +720,7 @@ class MusicSeparation:
                 f.write(f"{format_time_srt(seg['start'])} --> {format_time_srt(seg['end'])}\n")
                 f.write(f"{seg['text']}\n\n")
 
-        print(f"辨識完成，SRT 已輸出: {srt_path}")
+        print(f"辨識完成,SRT 已輸出: {srt_path}")
 
         #--- 清理記憶體 ---
         del model
@@ -808,7 +809,7 @@ class MusicSeparation:
 
         #--- 3. 處理與辨識 (Direct Generate) ---
         segments_for_output = []
-        print(f"VAD 初步切出 {len(speech_timestamps)} 個片段，正在進行長度檢查與辨識...")
+        print(f"VAD 初步切出 {len(speech_timestamps)} 個片段,正在進行長度檢查與辨識...")
 
         #強制切分上限 (秒)
         MAX_CHUNK_DURATION = 25.0 
@@ -854,7 +855,7 @@ class MusicSeparation:
                 ).input_features.to(device).to(torch_dtype)
 
                 #2. 直接生成 Token IDs
-                #這裡完全繞過了 Pipeline 的 logprobs 變數檢查，所以絕對不會崩潰
+                #這裡完全繞過了 Pipeline 的 logprobs 變數檢查,所以絕對不會崩潰
                 with torch.no_grad():
                     generated_ids = model.generate(
                         input_features,
@@ -898,7 +899,7 @@ class MusicSeparation:
                 f.write(f"{format_time_srt(seg['start'])} --> {format_time_srt(seg['end'])}\n")
                 f.write(f"{seg['text']}\n\n")
 
-        print(f"辨識完成，SRT 已輸出: {srt_path}")
+        print(f"辨識完成,SRT 已輸出: {srt_path}")
 
         #--- 清理記憶體 ---
         del model
@@ -921,7 +922,6 @@ class MusicSeparation:
         import soundfile as sf
         from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
         
-        #... (GUI 與 檔案選擇程式碼保持不變) ...
         try:
             root = tk.Tk()
             root.withdraw()
@@ -946,14 +946,14 @@ class MusicSeparation:
         audio_dir = os.path.dirname(file_path)
         filename = os.path.splitext(os.path.basename(file_path))[0]
         
-        #0. 獲取音訊總長度
+        #獲取音訊總長度
         try:
             info = sf.info(file_path)
             audio_duration = info.duration
         except:
             audio_duration = 999999.0
 
-        #--- 1. 載入模型 (Direct Mode) ---
+        #--- 載入模型 ---
         tempmodel = "Zzzkay1/whisper-small-zh" 
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -969,8 +969,8 @@ class MusicSeparation:
             print(f"模型載入失敗: {e}")
             return None
 
-        #--- 2. VAD 預處理與過濾 (加強版：殺死孤島雜訊) ---
-        print("正在進行 VAD 過濾 (將非人聲部分靜音)...")
+        #--- VAD預處理與過濾 ---
+        print("正在進行VAD過濾...")
         processed_file_path = os.path.join(audio_dir, f"{filename}_vad_processed.wav")
         
         try:
@@ -984,14 +984,14 @@ class MusicSeparation:
             raw_timestamps = get_speech_timestamps(
                 wav, 
                 vad_model, 
-                threshold=0.4,           
+                threshold=0.4,           #語音判定的閾值
                 sampling_rate=16000, 
-                min_speech_duration_ms=100, #先設小一點，讓我們能捕捉到所有東西，後面再過濾
-                min_silence_duration_ms=100, 
-                speech_pad_ms=50       
+                min_speech_duration_ms=100, #最短語音持續時間,先設小一點,讓我們能捕捉到所有東西,後面再過濾
+                min_silence_duration_ms=100, #最短靜音持續時間
+                speech_pad_ms=50       #語音前後的填充時間
             )
 
-            #★★★ 新增：清洗時間戳記邏輯 ★★★
+            #清洗時間戳
             clean_timestamps = []
             
             for stamp in raw_timestamps:
@@ -999,10 +999,9 @@ class MusicSeparation:
                 end = stamp['end']
                 duration_ms = (end - start) / 16000 * 1000
                 
-                #策略 1: 殺死孤島
-                #如果這段聲音小於 400ms (0.4秒)，人類講話很少這麼短 (通常是雜音)現在改500ms，出事再改回去
-                if duration_ms < 500: 
-                    print(f"發現短雜訊，已過濾: {duration_ms:.2f}ms")
+                #聲音小於 400ms視為雜音,現在改500ms,出事再改回去
+                if duration_ms < 400: 
+                    print(f"發現短雜訊,已過濾: {duration_ms:.2f}ms")
                     continue
                 
                 clean_timestamps.append(stamp)
@@ -1013,23 +1012,23 @@ class MusicSeparation:
             if len(speech_timestamps) > 0:
                 vad_audio = torch.zeros_like(wav)
                 
-                #只複製清洗後的片段
+                #複製清洗後的片段
                 for stamp in speech_timestamps:
                     vad_audio[stamp['start']:stamp['end']] = wav[stamp['start']:stamp['end']]
                 
-                #儲存 (建議保留這行查看處理後的檔案是否還有那個小點)
+                #儲存
                 save_audio(processed_file_path, vad_audio, sampling_rate=16000)
-                print(f"VAD 過濾完成，暫存檔: {processed_file_path}")
+                print(f"VAD 過濾完成,暫存檔: {processed_file_path}")
                 
                 wav = vad_audio 
             else:
-                print("警告: VAD 過濾後沒有剩餘人聲 (可能都是雜訊)，將使用原始檔案。")
+                print("警告: VAD 過濾後沒有剩餘人聲 (可能都是雜訊),將使用原始檔案。")
 
         except Exception as e:
-            print(f"VAD 處理失敗，將使用原始檔案: {e}")
-            #如果失敗，wav 保持原樣，繼續執行
+            print(f"VAD 處理失敗,將使用原始檔案: {e}")
+            #如果失敗,wav 保持原樣,繼續執行
 
-        #--- 3. 微切分與辨識 (Direct Generate) ---
+        #--- 微切分與辨識 ---
         segments_for_output = []
         print(f"準備對 {len(speech_timestamps)} 個片段進行長度檢查與辨識...")
 
@@ -1046,7 +1045,7 @@ class MusicSeparation:
             if duration_sec <= MAX_CHUNK_DURATION:
                 final_chunks_to_process.append((start_sample, end_sample))
             else:
-                #如果單一句子超過 25 秒，強制切斷
+                #如果單一句子超過 25 秒,強制切斷
                 num_sub_chunks = math.ceil(duration_sec / MAX_CHUNK_DURATION)
                 chunk_samples = int(MAX_CHUNK_DURATION * 16000)
                 for i in range(num_sub_chunks):
@@ -1056,7 +1055,7 @@ class MusicSeparation:
                     final_chunks_to_process.append((sub_start, sub_end))
 
         #設定解碼參數
-        #使用 Input_language 參數，若為 None 或 "auto" 則自動偵測
+        #使用Input_language參數,若為 None 或 "auto" 則自動偵測
         lang = Input_language if Input_language and Input_language.lower() != "auto" else None
         forced_decoder_ids = processor.get_decoder_prompt_ids(language=lang, task="transcribe")
 
@@ -1065,18 +1064,18 @@ class MusicSeparation:
             vad_start_time = start_sample / 16000
             vad_end_time = end_sample / 16000
             
-            #★ 這裡取出的 segment_wav 已經是經過 VAD 過濾的乾淨音訊了
+            #這裡取出的segment_wav是經過VAD過濾的音訊
             segment_wav = wav[start_sample:end_sample].numpy()
             
             try:
-                #1. 轉特徵
+                #轉特徵
                 input_features = processor(
                     segment_wav, 
                     sampling_rate=16000, 
                     return_tensors="pt"
                 ).input_features.to(device).to(torch_dtype)
 
-                #2. 直接生成 (Direct Generate)
+                #直接生成
                 with torch.no_grad():
                     generated_ids = model.generate(
                         input_features,
@@ -1086,7 +1085,7 @@ class MusicSeparation:
                         repetition_penalty=1.2
                     )
 
-                #3. 解碼
+                #解碼
                 text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             except Exception as e:
@@ -1124,13 +1123,13 @@ class MusicSeparation:
         txt_path = os.path.join(audio_dir, f"{filename}.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
             for seg in segments_for_output:
-                #每個片段換一行，若希望全部連在一起可移除 \n
+                #每個片段換一行,若希望全部連在一起可移除 \n
                 f.write(f"{seg['text']}\n")
 
-        print(f"辨識完成，SRT 已輸出: {srt_path}")
+        print(f"辨識完成,SRT 已輸出: {srt_path}")
 
         #--- 清理暫存檔與記憶體 ---
-        #如果你想保留過濾後的音訊檔，請註解掉下面這幾行
+        #如果你想保留過濾後的音訊檔,請註解掉下面這幾行
         if os.path.exists(processed_file_path):
             try:
                 #os.remove(processed_file_path) 
@@ -1148,3 +1147,50 @@ class MusicSeparation:
         torch.cuda.empty_cache()
 
         return [srt_path, "zh"]
+    
+    #ffmpeg升降調
+    def change_pitch_ffmpeg(input_file:str, n_steps):
+        if n_steps == 0:
+            return False
+        input_file = os.path.normpath(os.path.abspath(input_file))
+        #計算頻率變化係數
+        factor = 2 ** (n_steps / 12.0)
+        dir_name = os.path.dirname(input_file)
+        base_name = os.path.basename(input_file)
+        name_no_ext, ext = os.path.splitext(base_name)
+        
+        if not ext: 
+            ext = ".wav"
+            
+        output_file = os.path.join(dir_name, f"{name_no_ext}_step{n_steps}{ext}")
+        # 組合濾鏡：
+        # asetrate: 改變播放採樣率 (變調同時變速) -> 44100 * factor
+        # atempo: 修正速度 (把速度變回去) -> 1 / factor
+        # 注意：atempo 限制在 0.5 到 2.0 之間,若變調幅度過大需串聯多個 atempo,
+        # 但一般升降調 (-12 ~ +12) 通常還在範圍內或只需簡單處理。
+        
+        # 為了簡化,假設採樣率為 44100 (或是讓 ffmpeg 自動處理,但 asetrate 需要數值)
+        # 更穩健的方法是單純用 rubberband 濾鏡 (若 ffmpeg 有支援),
+        # 這裡使用通用的 asetrate+atempo 方法：
+        
+        # 這裡稍微簡化,不指定絕對頻率,而是假設輸入是 44100 (標準 MP3/WAV)
+        # 若要更精確,需先取得檔案的 sample rate,或是強制轉為 44100
+        sample_rate = 44100
+        new_rate = int(sample_rate * factor)
+        tempo = 1.0 / factor
+        
+        filter_complex = f"aresample={sample_rate},asetrate={new_rate},atempo={tempo}"
+        dir_name = os.path.dirname(input_file)
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_file,
+            "-af", filter_complex,
+            output_file
+        ]
+        
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return output_file
+        except subprocess.CalledProcessError as e:
+            raise e

@@ -16,14 +16,14 @@ class YouTubeDownload:
     @staticmethod
     def check_YouTube_available(url: str) -> bool:
         try:
-            # 加入 use_oauth=True 增加通過率，避免被當成機器人
-            # allow_oauth_cache=True 會在本地儲存驗證資訊，不用每次都驗證
+            #use_oauth=True 增加通過率，避免被當機器人
+            #allow_oauth_cache=True 在本地儲存驗證資訊
             yt = YouTube(url)
             
-            # 1. 檢查影片是否因版權、區域限制而無法播放
+            #檢查影片是否因版權、區域限制而無法播放
             yt.check_availability()
             
-            # 2. 嘗試讀取標題，確認 Metadata 解析正常 (這會觸發網路請求)
+            #嘗試讀取標題，確認Metadata解析正常
             if yt.title:
                 return True
                 
@@ -34,7 +34,7 @@ class YouTubeDownload:
             print(f"網址格式錯誤或解析失敗: {url}")
             return False
         except Exception as e:
-            # 捕捉其他非預期的錯誤 (如網路斷線)
+            #捕捉其他非預期的錯誤
             print(f"檢查時發生未預期錯誤: {e}")
             return False
         print("未知錯誤")
@@ -84,7 +84,7 @@ class YouTubeDownload:
                 yt = YouTube(video_url)
                 title = YouTubeDownload.sanitize_filename(yt.title)
 
-                #優先取得 1080p 無聲影片
+                #優先取得1080p無聲影片
                 video_stream = yt.streams.filter(res="1080p", mime_type="video/mp4", only_video=True).first()
                 #若無1080p，退而求其次找最高畫質的影片
                 if not video_stream:
@@ -109,7 +109,7 @@ class YouTubeDownload:
                     yt = YouTube(video)
                     title = YouTubeDownload.sanitize_filename(yt.title)
 
-                    #優先取得 1080p 無聲影片
+                    #優先取得1080p無聲影片
                     video_stream = yt.streams.filter(res="1080p", mime_type="video/mp4", only_video=True).first()
                     #若無1080p，退而求其次找最高畫質的影片
                     if not video_stream:

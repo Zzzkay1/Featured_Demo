@@ -14,7 +14,7 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 from YouTubeDownload import YouTubeDownload
 from WebDisplay import WebDisplay
-from MusicSeparation import MusicSeparation
+from MusicTools import MusicSeparation
 
 class MyApp(QtWidgets.QMainWindow):
     #初始化
