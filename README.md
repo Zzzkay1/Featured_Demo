@@ -13,6 +13,7 @@
 |歌詞辨識|0.4|Whisper|https://huggingface.co/openai/whisper-small|
 |畫面輸出|1|同網頁||
 |升降調|1|ffmpeg|https://www.ffmpeg.org/|
+|推薦歌曲|0|沒時間||
 # 專題下載
 |專題可執行檔共用連結|
 |---|
