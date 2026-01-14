@@ -10,14 +10,14 @@ import re
 import json
 from datetime import datetime
 
-#--- 1. 模擬環境與模組匯入 ---
+#--- 模擬環境與模組匯入 ---
 try:
     from YouTubeDownload import YouTubeDownload
     from MusicTools import MusicTools
 except ImportError as e:
     print(f"模組匯入警告: {e}")
 
-#--- 2. 核心邏輯與工具函式 ---
+#--- 核心邏輯與工具函式 ---
 
 def parse_srt(srt_path):
     """讀取 SRT 檔案並解析為 JSON 格式供 JS 使用"""
@@ -81,7 +81,7 @@ def clear_output_folder(output_dir):
         shutil.rmtree(output_dir)
         os.makedirs(output_dir, exist_ok=True)
 
-#--- 3. 背景任務管理 (Singleton 模式) ---
+#--- 背景任務管理  ---
 @st.cache_resource
 class TaskManager:
     def __init__(self):
@@ -190,7 +190,7 @@ class TaskManager:
 
 task_manager = TaskManager()
 
-#--- 4. 介面顯示類別 ---
+#--- 介面顯示類別 ---
 
 class WebDisplay:
     #初始化
