@@ -1,4 +1,5 @@
-# Byte-compiled / optimized / DLL files
+*.csv
+-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -167,15 +168,21 @@ env/
 *.bat
 *.mp4
 *.wav
-score/訓練模型區塊/
-score/whisper-small-zh/
-score/processed_songs/
+source/訓練模型區塊/
+source/whisper-small-zh/
+source/whisper-small-tw/
+source/whisper-small-en/
+source/processed_songs/
 output/
-score/output/
-score/music/
-score/openai/
+source/output/
+source/music/
+source/openai/
 download/
-score/download/
+source/download/
 *.exe
 import.txt
 WPy64-31180/
+*.json
+*.ZZZKAY1
+*.pt
+*.pth

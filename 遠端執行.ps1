@@ -1,1 +1,1 @@
-.\WPy64-31180\python-3.11.8.amd64\python.exe .\score\start.py
+.\WPy64-31180\python-3.11.8.amd64\python.exe .\source\start.py

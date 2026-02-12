@@ -141,7 +141,7 @@ class MusicTools:
 
             #取得輸出路徑及建立資料夾
             base_name = os.path.splitext(os.path.basename(input_file))[0]
-            output_dir = os.path.join(os.getcwd(), "score/output", base_name)
+            output_dir = os.path.join(os.getcwd(), "source/output", base_name)
             os.makedirs(output_dir, exist_ok=True)
 
             #混音(Bass、Drum、Other)
