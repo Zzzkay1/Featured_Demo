@@ -11,6 +11,7 @@ from torchaudio.pipelines import HDEMUCS_HIGH_MUSDB
 from torchaudio.transforms import Fade
 import time
 
+
 #將 transformers 移到全域引用,解決 Worker Error
 try:
     from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
@@ -954,7 +955,12 @@ class MusicTools:
             audio_duration = 999999.0
 
         #--- 載入模型 ---
-        tempmodel = "Zzzkay1/whisper-small-zh" 
+        if Input_language == "zh" or Input_language == "" or Input_language == "中文":
+            tempmodel = "Zzzkay1/whisper-small-zh" 
+        if Input_language == "en" or Input_language == "英文":
+            tempmodel = "Zzzkay1/whisper-small-en" 
+        if Input_language == "nan" or Input_language == "閩南語":
+            tempmodel = "Zzzkay1/whisper-small-nan"
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
@@ -1057,7 +1063,7 @@ class MusicTools:
         #設定解碼參數
         #使用Input_language參數,若為 None 或 "auto" 則自動偵測
         lang = Input_language if Input_language and Input_language.lower() != "auto" else None
-        forced_decoder_ids = processor.get_decoder_prompt_ids(language=lang, task="transcribe")
+        #forced_decoder_ids = processor.get_decoder_prompt_ids(language=lang, task="transcribe")
 
         for idx, (start_sample, end_sample) in enumerate(final_chunks_to_process):
             
@@ -1079,7 +1085,7 @@ class MusicTools:
                 with torch.no_grad():
                     generated_ids = model.generate(
                         input_features,
-                        forced_decoder_ids=forced_decoder_ids,
+                        #forced_decoder_ids=forced_decoder_ids,
                         max_new_tokens=255, 
                         temperature=0.0,
                         repetition_penalty=1.2
@@ -1146,7 +1152,7 @@ class MusicTools:
         gc.collect()
         torch.cuda.empty_cache()
 
-        return [srt_path, "zh"]
+        return [srt_path, Input_language]
     
     #ffmpeg升降調
     def change_pitch_ffmpeg(input_file:str, n_steps):

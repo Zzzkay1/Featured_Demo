@@ -9,15 +9,9 @@ import threading
 import re
 import json
 from datetime import datetime
-
-#--- 模擬環境與模組匯入 ---
-try:
-    from YouTubeDownload import YouTubeDownload
-    from MusicTools import MusicTools
-except ImportError as e:
-    print(f"模組匯入警告: {e}")
-
-#--- 核心邏輯與工具函式 ---
+from YouTubeDownload import YouTubeDownload
+from MusicTools import MusicTools
+#---核心邏輯與工具函式---
 
 def parse_srt(srt_path):
     """讀取 SRT 檔案並解析為 JSON 格式供 JS 使用"""
@@ -81,7 +75,7 @@ def clear_output_folder(output_dir):
         shutil.rmtree(output_dir)
         os.makedirs(output_dir, exist_ok=True)
 
-#--- 背景任務管理  ---
+#---背景任務管理---
 @st.cache_resource
 class TaskManager:
     def __init__(self):
@@ -92,7 +86,7 @@ class TaskManager:
         self.lock = threading.Lock()
 
     #輸入網址開始執行
-    def start_task(self, url, output_dir, pitch_steps=0):
+    def start_task(self, url, output_dir, pitch_steps=0, input_language="zh"):
         with self.lock:
             if self.is_processing:
                 return False
@@ -101,13 +95,13 @@ class TaskManager:
             self.current_task_url = url
             self.status_message = "啟動處理程序..."
             
-            thread = threading.Thread(target=self._worker, args=(url, output_dir, pitch_steps))
+            thread = threading.Thread(target=self._worker, args=(url, output_dir, pitch_steps, input_language))
             thread.daemon = True
             thread.start()
             return True
     
     #開始執行的具體步驟
-    def _worker(self, url, output_dir, pitch_steps):
+    def _worker(self, url, output_dir, pitch_steps, input_language:str):
         if (not(YouTubeDownload.check_YouTube_available(url))):
             self.status_message = "連結輸入錯誤或網路不可用"
             return
@@ -121,7 +115,7 @@ class TaskManager:
 
             target_audio = separation[0] 
             
-            #--- 變調處理 ---
+            #變調處理
             if pitch_steps != 0:
                 self.status_message = f"進行升降調處理({pitch_steps}半音)..."
                 
@@ -131,20 +125,18 @@ class TaskManager:
                 
                 #FFmpeg變調
                 target_audio = MusicTools.change_pitch_ffmpeg(target_audio, pitch_steps)
-            #-----------------------------------
 
             self.status_message = "合併影片與音訊..."
 
             #使用變調後的音訊進行合併
             merge = YouTubeDownload.merge_video_audio(video, target_audio)
 
-            self.status_message = "Whisper 歌詞辨識中..."
-            AsrReturn = MusicTools.run_ASR(separation[1])
+            self.status_message = f"Whisper 歌詞辨識中(語言: {input_language})..."
+            AsrReturn = MusicTools.run_ASR(separation[1],Input_language=input_language)
             
             srt_source_path = None
             if AsrReturn and len(AsrReturn) > 0:
                 srt_source_path = AsrReturn[0]
-                #srt_source_path = r"H:\NFU\score\download\測試.srt" #測試用路徑
 
             merge = merge.strip('"').strip("'")
             safe_name = os.path.basename(merge).replace("／", "_").replace("/", "_").replace("\\", "_")
@@ -190,7 +182,7 @@ class TaskManager:
 
 task_manager = TaskManager()
 
-#--- 介面顯示類別 ---
+#---介面顯示類別---
 
 class WebDisplay:
     #初始化
@@ -225,14 +217,14 @@ class WebDisplay:
                 if filename == task_manager.last_completed_file:
                     label += " (New!)"
 
-                if st.button(label, key=f"btn_{filename}", use_container_width=True):
+                if st.button(label, key=f"btn_{filename}", width='stretch'):
                     st.session_state.current_playing_name = filename
                     st.rerun()
         else:
             st.caption("尚無檔案，請新增任務。")
         
         st.markdown("---")
-        if st.button("清除所有紀錄", use_container_width=True):
+        if st.button("清除所有紀錄", width='stretch'):
             clear_output_folder(self.output_dir)
             st.session_state.current_playing_name = None
             st.rerun()
@@ -251,29 +243,31 @@ class WebDisplay:
             </style>
         """, unsafe_allow_html=True)
 
-        #--- 側邊欄 ---
+        #側邊欄
         with st.sidebar:
             self.sidebar_queue_fragment()
 
-        #--- 輸入框 ---
+        #輸入框
         #建立一個容器放在最上方
         with st.container():
-            #使用 columns 稍微限縮寬度，或者直接全寬
-            #這裡使用全寬讓輸入框更明顯
             with st.form("task_form"):
-                c1, c2, c3 = st.columns([6, 1, 2], vertical_alignment="bottom") # 調整欄位比例
+                c1, c4, c2, c3 = st.columns([6, 1, 1, 2], vertical_alignment="bottom") #調整欄位比例
                 with c1:
-                    url_input = st.text_input("YouTube URL", placeholder="請輸入 YouTube 連結...", label_visibility="collapsed")
+                    url_input = st.text_input("YouTube URL", placeholder="請輸入 YouTube 連結...", label_visibility="collapsed", key="url_input_key")
+                with c4:
+                    #建立語言映射字典
+                    lang_mapping = {"中文": "zh", "英文": "en", "閩南語": "nan"}
+                    selected_lang = st.selectbox("辨識語言", options=list(lang_mapping.keys()))
                 with c2:
-                    # 新增：升降調選擇 (-6 到 +6 半音)
+                    #升降調選擇(-6到+6半音)
                     semitones = st.number_input("升降調 (半音)", min_value=-12, max_value=12, value=0, step=1, help="正數為升調，負數為降調")
                 with c3:
-                    submitted = st.form_submit_button("加入背景處理", type="primary", use_container_width=True)
+                    submitted = st.form_submit_button("加入背景處理", type="primary", width='stretch')
                 
                 if submitted:
                     if url_input:
                         if not task_manager.is_processing:
-                            success = task_manager.start_task(url_input, self.output_dir, semitones)
+                            success = task_manager.start_task(url_input, self.output_dir, semitones, selected_lang)
                             if success:
                                 st.toast(f"已加入排程(變調:{semitones})，請留意側邊欄狀態！")
                             else:
@@ -285,7 +279,7 @@ class WebDisplay:
 
         st.markdown("---") #分隔線
 
-        #--- 分欄:左播放器，右歌詞 ---
+        #分欄:左播放器，右歌詞
         #調整比例
         col_player, col_lyrics = st.columns([1.6, 1]) 
 
@@ -312,10 +306,10 @@ class WebDisplay:
                 st.session_state.current_playing_name = None
                 st.rerun()
 
-        #--- 左欄:影片播放器 ---
+        #左欄:影片播放器
         with col_player:
             if has_video:
-                 #這裡呼叫拆分後的播放器 HTML (僅含影片標籤)
+                 #這裡呼叫拆分後的播放器HTML(僅含影片標籤)
                 self.render_video_player_only(video_b64, subtitles_json)
             else:
                 st.empty()
@@ -337,27 +331,134 @@ class WebDisplay:
                     unsafe_allow_html=True
                 )
 
-        #--- 右欄:歌詞列表 ---
+        #右欄:歌詞列表
         with col_lyrics:
             if has_video:
                 pass 
             else:
                 st.info("暫無歌詞資料")
 
-        #--- 渲染整合後的HTML ---
+        #渲染整合後的HTML
         #因為iframe限制，我們必須把「影片」和「歌詞」寫在同一個components.html裡
         #才能透過JS互相控制(點歌詞跳轉影片)
         #我們使用CSS來模擬Streamlit的左右分欄效果
         if has_video:
-            #我們把剛剛建立的col_player和col_lyrics內容清空或當作佔位符
-            #直接在下方渲染一個全寬的Component，內部自己分左右
-            #為了版面好看，我們可以把上面的st.subheader移除，直接寫在HTML裡
-            
-            #清除上面兩個col的暫位內容(視覺上)-實際上Streamlit無法動態刪除已渲染的元件
-            #所以上面的col_player/lyrics只是用來顯示標題或空狀態
-            #當有影片時，我們改用下面這個全版元件來取代原本的分欄顯示
-            
             self.render_split_layout_player(video_b64, subtitles_json,target_file)
+
+        if target_file:
+            st.markdown("---")
+            st.subheader("為您推薦")
+            
+            #從檔名中提取出歌曲名稱來當作搜尋關鍵字(去除副檔名)
+            #視你的檔案命名規則而定，你也可以在這裡加入額外的字串處理
+            song_name = os.path.splitext(target_file)[0] 
+            
+            with st.spinner("正在尋找推薦歌曲..."):
+                #呼叫你的推薦函式
+                recommendations = YouTubeDownload.get_recommendations_by_artist(song_name, count=3)
+            
+            if recommendations:
+                def add_to_queue_callback(url, title, semi, lang):
+                    st.session_state.url_input_key = url
+                    
+                    #執行排程邏輯
+                    if not task_manager.is_processing:
+                        success = task_manager.start_task(url, self.output_dir, semi, lang)
+                        if success:
+                            st.toast(f"已將《{title}》加入排程！")
+                        else:
+                            st.error("任務啟動失敗。")
+                    else:
+                        st.warning("目前已有任務正在執行，請稍候。")
+                #設定每排最多顯示幾張卡片
+                max_cols_per_row = 4
+                
+                #將推薦清單分組，處理超過設定數量的情況
+                for i in range(0, len(recommendations), max_cols_per_row):
+                    chunk = recommendations[i:i + max_cols_per_row]
+                    cols = st.columns(len(chunk))
+                    
+                    for col, rec in zip(cols, chunk):
+                        with col:
+                            with st.container(border=True):
+                                #利用videoId取得YouTube影片縮圖
+                                thumbnail_url = f"https://img.youtube.com/vi/{rec['videoId']}/mqdefault.jpg"
+                                st.image(thumbnail_url, width='stretch')
+                                
+                                #顯示標題與歌手
+                                st.markdown(f"**{rec['title']}**")
+                                artist_name = rec['artist']
+                                real_photo_url = rec['artist_img']
+                                if real_photo_url.startswith("//"):
+                                    real_photo_url = "https:" + real_photo_url
+
+                                artist_html = f"""
+                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+                                    <img src="{real_photo_url}" width="24" height="24" 
+                                         style="border-radius: 50%; object-fit: cover;" 
+                                         referrerpolicy="no-referrer" 
+                                         onerror="this.src='https://ui-avatars.com/api/?name={artist_name}&background=random&color=fff&rounded=true&size=24'">
+                                    <span style="font-size: 14px; color: #555;">{artist_name}</span>
+                                </div>
+                                """
+                                st.markdown(artist_html, unsafe_allow_html=True)
+                                
+                                yt_url = f"https://www.youtube.com/watch?v={rec['videoId']}"
+                                
+                                lang_mapping = {"中文": "zh", "英文": "en", "閩南語": "nan"}
+                                card_lang_key = st.selectbox(
+                                    "辨識語言", 
+                                    options=list(lang_mapping.keys()), 
+                                    key=f"lang_sel_{rec['videoId']}",
+                                    label_visibility="collapsed"
+                                )
+                                card_lang_val = lang_mapping[card_lang_key]
+                                #建立左右兩個按鈕的區塊
+                                btn_col1, btn_col2 = st.columns(2)
+                                
+                                #左邊按鈕:加入處理佇列
+                                with btn_col1:
+                                    st.button(
+                                        "➕ 加入", 
+                                        key=f"btn_add_{rec['videoId']}", 
+                                        use_container_width=True,
+                                        on_click=add_to_queue_callback, 
+                                        args=(yt_url, rec['title'], semitones, card_lang_val) 
+                                    )
+
+                                #右邊按鈕:複製連結
+                                with btn_col2:
+                                    btn_id = f"copy-btn-{rec['videoId']}"
+                                    
+                                    copy_button_html = f"""
+                                    <button id="{btn_id}" onclick="copyUrl_{rec['videoId']}()" 
+                                            style="width: 100%; padding: 6px 12px; background-color: transparent; 
+                                                   color: #31333F; border: 1px solid rgba(49, 51, 63, 0.2); 
+                                                   border-radius: 8px; cursor: pointer; font-family: sans-serif; 
+                                                   font-size: 14px; transition: all 0.3s; margin-top: 1px;">
+                                        📋 複製
+                                    </button>
+                                    <script>
+                                    function copyUrl_{rec['videoId']}() {{
+                                        navigator.clipboard.writeText('{yt_url}').then(() => {{
+                                            var btn = document.getElementById('{btn_id}');
+                                            btn.innerText = '✅ 已複製';
+                                            btn.style.borderColor = '#00CC66';
+                                            btn.style.color = '#00CC66';
+                                            setTimeout(() => {{
+                                                btn.innerText = '📋 複製';
+                                                btn.style.borderColor = 'rgba(49, 51, 63, 0.2)';
+                                                btn.style.color = '#31333F';
+                                            }}, 2000);
+                                        }}).catch(err => {{
+                                            console.error('複製失敗: ', err);
+                                        }});
+                                    }}
+                                    </script>
+                                    """
+                                    components.html(copy_button_html, height=45)
+            else:
+                st.info("目前沒有推薦歌曲。")
 
     #已棄用
     def render_video_player_only(self, video_b64, subtitles_json):

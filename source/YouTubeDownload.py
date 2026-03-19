@@ -5,6 +5,7 @@ import os
 import subprocess
 import re
 from pytubefix.exceptions import VideoUnavailable, RegexMatchError
+from ytmusicapi import YTMusic
 
 class YouTubeDownload:
     def __init__(self):
@@ -185,3 +186,36 @@ class YouTubeDownload:
             return f'"{output_path}"'
         except Exception as e:
             raise f"合併失敗：{e}"
+
+    def get_recommendations_by_artist(song_name, count=3):
+            yt = YTMusic()
+            search_results = yt.search(song_name, filter="songs")
+            if not search_results:
+                return None
+            
+            target_song = search_results[0]
+            target_title = target_song['title']
+            
+            artists = target_song.get('artists', [])
+            if not artists or 'id' not in artists[0] or not artists[0]['id']:
+                return None
+                
+            artist_id = artists[0]['id']
+            artist_page = yt.get_artist(artist_id)
+
+            artist_img_url = "https://ui-avatars.com/api/?name=Artist&background=random" #預設圖片
+            if 'thumbnails' in artist_page and artist_page['thumbnails']:
+                artist_img_url = artist_page['thumbnails'][0]['url']
+
+            all_songs = artist_page.get('songs', {}).get('results', [])
+            
+            recommendations = []
+            for song in all_songs:
+                if song['title'] != target_title and len(recommendations) < count:
+                    recommendations.append({
+                        'title': song['title'],
+                        'videoId': song['videoId'],
+                        'artist': artists[0]['name'],
+                        'artist_img': artist_img_url
+                    })
+            return recommendations

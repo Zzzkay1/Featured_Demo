@@ -186,3 +186,8 @@ WPy64-31180/
 *.ZZZKAY1
 *.pt
 *.pth
+/source/whisper-small-zh(20260227)
+/source/whisper-small-zh_0201訓練
+/source/whisper-small-nan
+/source/whisper-small-en_260318
+*.zip
