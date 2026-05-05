@@ -65,7 +65,7 @@ class MusicTools:
         return final
 
     @staticmethod
-    def run_separation(audio_path, segment = 15.0, use_cuda = True) -> str|None:
+    def run_separation(audio_path, segment = 15.0, use_cuda = True) -> list|None:
         #嘗試載入模型
         try:
             bundle = HDEMUCS_HIGH_MUSDB
@@ -990,7 +990,7 @@ class MusicTools:
             raw_timestamps = get_speech_timestamps(
                 wav, 
                 vad_model, 
-                threshold=0.4,           #語音判定的閾值
+                threshold=0.25,           #語音判定的閾值
                 sampling_rate=16000, 
                 min_speech_duration_ms=100, #最短語音持續時間,先設小一點,讓我們能捕捉到所有東西,後面再過濾
                 min_silence_duration_ms=100, #最短靜音持續時間
