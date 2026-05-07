@@ -9,8 +9,143 @@ import threading
 import re
 import json
 from datetime import datetime
+from google import genai
+from google.genai import types
 from YouTubeDownload import YouTubeDownload
 from MusicTools import MusicTools
+
+#---Gemini 字幕校正工具函式---
+def parse_srt_for_correction(file_path):
+    """讀取並解析 SRT 檔案，抽離時間軸與文字"""
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    blocks = re.split(r'\n\n+', content.strip())
+    subtitles = []
+    
+    for block in blocks:
+        lines = block.split('\n')
+        if len(lines) >= 3:
+            index = lines[0].strip()
+            timestamp = lines[1].strip()
+            text = " ".join(lines[2:]).strip() 
+            subtitles.append({
+                "index": index,
+                "timestamp": timestamp,
+                "text": text
+            })
+            
+    return subtitles
+
+def write_srt_for_correction(subtitles, output_path):
+    """將修正後的字幕陣列重新組裝成 SRT 檔案"""
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for sub in subtitles:
+            f.write(f"{sub['index']}\n")
+            f.write(f"{sub['timestamp']}\n")
+            f.write(f"{sub['text']}\n\n")
+
+def correct_srt_text_only(input_file: str, output_file: str, api_key: str = None):
+    # 初始化 Gemini 客戶端
+    if api_key:
+        client = genai.Client(api_key=api_key)
+    elif os.environ.get("GEMINI_API_KEY"):
+        client = genai.Client()
+    else:
+        return False, "未設定 Gemini API Key，請在左側邊欄輸入。"
+        
+    subtitles = parse_srt_for_correction(input_file)
+    
+    if not subtitles:
+        return False, "解析 SRT 失敗或檔案為空。"
+
+    # 製作專屬給 LLM 閱讀的 Payload (只包含 行號 與 文字)
+    llm_payload = ""
+    for sub in subtitles:
+        if sub['text']: 
+            llm_payload += f"{sub['index']}|||{sub['text']}\n"
+
+    system_instruction = """
+    你是一個專業的歌詞校對專家。請修正以下歌詞中的同音字錯誤或不合理的空耳詞彙。
+
+    【輸入與輸出格式嚴格限制】：
+    1. 每一行的格式為「行號|||歌詞」。
+    2. 你必須原封不動地保留「行號」與「|||」符號。
+    3. **絕對不可**合併行、刪除行或新增行。輸入有幾行，輸出就必須有幾行。
+    4. 你的輸出必須「只有」修正後的內容，不要加入任何問候語、解釋或 Markdown 標記 (如 ```)。
+    5. 若該行歌詞沒有錯字，請直接輸出原本的「行號|||歌詞」。
+    6. 請根據上下文修正錯字（例如將 Bed for long the cross 修正為語意正確的歌詞）。
+    7. 尊重原語言與方言（如台語/閩南語、繁體中文、英文）。若是台語歌詞，請保留台語漢字語法，絕對不可強行翻譯為現代標準國語，只需修正發音相近的錯字。
+    """
+
+    try:
+        max_retries = 3
+        retry_delay = 5
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model='gemma-4-31b-it',
+                    contents=[system_instruction, f"【原始歌詞資料】：\n{llm_payload}"],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1, 
+                    )
+                )
+                break
+            except Exception as api_err:
+                # 處理伺服器忙碌(503)或請求過多(429)的情況
+                if ("503" in str(api_err) or "429" in str(api_err) or "UNAVAILABLE" in str(api_err)) and attempt < max_retries - 1:
+                    import time
+                    print(f"API 忙碌中，等待 {retry_delay} 秒後重試... ({attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    raise api_err
+        
+        corrected_text = response.text.strip()
+        
+        # 移除可能殘留的 markdown 標記
+        if corrected_text.startswith("```"):
+            corrected_text = "\n".join(corrected_text.split("\n")[1:-1]).strip()
+
+        # 解析 LLM 回傳的結果，建立 {行號: 修正後歌詞} 的字典
+        corrected_dict = {}
+        for line in corrected_text.split('\n'):
+            if '|||' in line:
+                parts = line.split('|||', 1) 
+                if len(parts) == 2:
+                    idx = parts[0].strip()
+                    text = parts[1].strip()
+                    corrected_dict[idx] = text
+
+        # 將修正後的歌詞「重新注入」回原本的 SRT 結構中
+        modify_count = 0
+        for sub in subtitles:
+            idx = sub['index']
+            if idx in corrected_dict:
+                original_text = sub['text']
+                new_text = corrected_dict[idx]
+                
+                if original_text != new_text:
+                    modify_count += 1
+                    
+                sub['text'] = new_text
+
+        # 寫出最終的 SRT 檔案
+        write_srt_for_correction(subtitles, output_file)
+        
+        # 同時將純歌詞寫出為 txt 檔案
+        txt_output_path = os.path.splitext(output_file)[0] + "_fix" + ".txt"
+        with open(txt_output_path, 'w', encoding='utf-8') as txt_f:
+            for sub in subtitles:
+                if sub['text'].strip(): # 略過空白行
+                    txt_f.write(f"{sub['text']}\n")
+
+        return True, f"共修正了 {modify_count} 句歌詞。純文字歌詞已儲存。"
+
+    except Exception as e:
+        return False, f"發生錯誤: {e}"
+
 #---核心邏輯與工具函式---
 
 def parse_srt(srt_path):
@@ -86,7 +221,7 @@ class TaskManager:
         self.lock = threading.Lock()
 
     #輸入網址開始執行
-    def start_task(self, url, output_dir, pitch_steps=0, input_language="zh"):
+    def start_task(self, url, output_dir, pitch_steps=0, input_language="zh", use_gemini=True, api_key=None):
         with self.lock:
             if self.is_processing:
                 return False
@@ -95,13 +230,13 @@ class TaskManager:
             self.current_task_url = url
             self.status_message = "啟動處理程序..."
             
-            thread = threading.Thread(target=self._worker, args=(url, output_dir, pitch_steps, input_language))
+            thread = threading.Thread(target=self._worker, args=(url, output_dir, pitch_steps, input_language, use_gemini, api_key))
             thread.daemon = True
             thread.start()
             return True
     
     #開始執行的具體步驟
-    def _worker(self, url, output_dir, pitch_steps, input_language:str):
+    def _worker(self, url, output_dir, pitch_steps, input_language:str, use_gemini:bool, api_key:str):
         if (not(YouTubeDownload.check_YouTube_available(url))):
             self.status_message = "連結輸入錯誤或網路不可用"
             return
@@ -169,6 +304,13 @@ class TaskManager:
             if srt_source_path and os.path.exists(srt_source_path):
                 if os.path.exists(out_srt_path): os.remove(out_srt_path)
                 shutil.move(srt_source_path, out_srt_path)
+                
+                # 在這裡進行歌詞 AI 校正
+                if use_gemini:
+                    self.status_message = "進行 AI 歌詞校正中..."
+                    success, msg = correct_srt_text_only(out_srt_path, out_srt_path, api_key)
+                    if not success:
+                        print(f"Gemini correction failed: {msg}")
 
             self.last_completed_file = safe_name
             self.status_message = f"✓ 完成：{safe_name}"
@@ -245,13 +387,14 @@ class WebDisplay:
 
         #側邊欄
         with st.sidebar:
+            st.text_input("Gemini API Key", type="password", key="gemini_api_key", help="若要使用 AI 校正，請輸入 API Key (也可以設定於環境變數 GEMINI_API_KEY)")
             self.sidebar_queue_fragment()
 
         #輸入框
         #建立一個容器放在最上方
         with st.container():
             with st.form("task_form"):
-                c1, c4, c2, c3 = st.columns([6, 1, 1, 2], vertical_alignment="bottom") #調整欄位比例
+                c1, c4, c2, c_gemini, c3 = st.columns([4, 1.5, 1.5, 1.5, 2], vertical_alignment="bottom") #調整欄位比例
                 with c1:
                     url_input = st.text_input("YouTube URL", placeholder="請輸入 YouTube 連結...", label_visibility="collapsed", key="url_input_key")
                 with c4:
@@ -261,13 +404,16 @@ class WebDisplay:
                 with c2:
                     #升降調選擇(-6到+6半音)
                     semitones = st.number_input("升降調 (半音)", min_value=-12, max_value=12, value=0, step=1, help="正數為升調，負數為降調")
+                with c_gemini:
+                    use_gemini = st.checkbox("AI 歌詞校正", value=True, key="use_gemini_chk")
                 with c3:
                     submitted = st.form_submit_button("加入背景處理", type="primary", width='stretch')
                 
                 if submitted:
                     if url_input:
                         if not task_manager.is_processing:
-                            success = task_manager.start_task(url_input, self.output_dir, semitones, selected_lang)
+                            current_api_key = st.session_state.get("gemini_api_key", "").strip()
+                            success = task_manager.start_task(url_input, self.output_dir, semitones, selected_lang, use_gemini, current_api_key)
                             if success:
                                 st.toast(f"已加入排程(變調:{semitones})，請留意側邊欄狀態！")
                             else:
@@ -358,12 +504,12 @@ class WebDisplay:
                 recommendations = YouTubeDownload.get_recommendations_by_artist(song_name, count=3)
             
             if recommendations:
-                def add_to_queue_callback(url, title, semi, lang):
+                def add_to_queue_callback(url, title, semi, lang, use_gem, api_key):
                     st.session_state.url_input_key = url
                     
                     #執行排程邏輯
                     if not task_manager.is_processing:
-                        success = task_manager.start_task(url, self.output_dir, semi, lang)
+                        success = task_manager.start_task(url, self.output_dir, semi, lang, use_gem, api_key)
                         if success:
                             st.toast(f"已將《{title}》加入排程！")
                         else:
@@ -418,12 +564,14 @@ class WebDisplay:
                                 
                                 #左邊按鈕:加入處理佇列
                                 with btn_col1:
+                                    use_gem = st.session_state.get("use_gemini_chk", True)
+                                    api_key_val = st.session_state.get("gemini_api_key", "").strip()
                                     st.button(
                                         "➕ 加入", 
                                         key=f"btn_add_{rec['videoId']}", 
                                         use_container_width=True,
                                         on_click=add_to_queue_callback, 
-                                        args=(yt_url, rec['title'], semitones, card_lang_val) 
+                                        args=(yt_url, rec['title'], semitones, card_lang_val, use_gem, api_key_val) 
                                     )
 
                                 #右邊按鈕:複製連結
