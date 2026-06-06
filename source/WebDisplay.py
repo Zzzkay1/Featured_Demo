@@ -1,6 +1,25 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import os
+import sys
+import builtins
+
+# 防止 Windows 下終端機預設編碼 (cp950) 無法印出日文或特殊符號而導致崩潰
+_orig_print = builtins.print
+def safe_print(*args, **kwargs):
+    try:
+        _orig_print(*args, **kwargs)
+    except UnicodeEncodeError:
+        new_args = []
+        enc = sys.stdout.encoding if hasattr(sys.stdout, 'encoding') and sys.stdout.encoding else 'cp950'
+        for arg in args:
+            if isinstance(arg, str):
+                new_args.append(arg.encode(enc, 'replace').decode(enc, 'replace'))
+            else:
+                new_args.append(arg)
+        _orig_print(*new_args, **kwargs)
+builtins.print = safe_print
+
 import base64
 import glob
 import shutil
@@ -13,6 +32,71 @@ from google import genai
 from google.genai import types
 from YouTubeDownload import YouTubeDownload
 from MusicTools import MusicTools
+
+# 啟動本地 HTTP Server 避開 Streamlit 靜態檔案 1GB 限制
+import tornado.ioloop
+import tornado.web
+import asyncio
+import socket
+
+def get_local_ip():
+    """取得本機在區域網路中的 IP 位址，讓區網其他裝置能正確連線"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+def get_free_port(start_port=8000):
+    for port in range(start_port, 8100):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', port))
+                return port
+        except OSError:
+            continue
+    return None
+
+def start_local_file_server(directory, port=8000):
+    """啟動一個背景 Tornado HTTP Server 專門提供靜態檔案 (完美支援 Range Requests)"""
+    free_port = get_free_port(port)
+    if not free_port:
+        return None
+
+    class CORSStaticFileHandler(tornado.web.StaticFileHandler):
+        def set_default_headers(self):
+            self.set_header("Access-Control-Allow-Origin", "*")
+            self.set_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.set_header("Access-Control-Allow-Headers", "Range")
+            self.set_header("Access-Control-Expose-Headers", "Accept-Ranges, Content-Encoding, Content-Length, Content-Range")
+            self.set_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            
+        def options(self, *args, **kwargs):
+            self.set_status(204)
+            self.finish()
+
+    app = tornado.web.Application([
+        (r"/(.*)", CORSStaticFileHandler, {"path": directory})
+    ])
+    
+    def run_server():
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        try:
+            app.listen(free_port)
+            tornado.ioloop.IOLoop.current().start()
+        except Exception as e:
+            print(f"Tornado Server Error: {e}")
+
+    thread = threading.Thread(target=run_server, daemon=True)
+    thread.start()
+    return free_port
+
+@st.cache_resource
+def get_local_server_port():
+    return start_local_file_server("static/output")
 
 #---Gemini 字幕校正工具函式---
 def parse_srt_for_correction(file_path):
@@ -46,13 +130,18 @@ def write_srt_for_correction(subtitles, output_path):
             f.write(f"{sub['text']}\n\n")
 
 def correct_srt_text_only(input_file: str, output_file: str, api_key: str = None):
+    # 嘗試從 API_Key.txt 讀取
+    if not api_key and os.path.exists("API_Key.txt"):
+        with open("API_Key.txt", "r", encoding="utf-8") as f:
+            api_key = f.read().strip()
+
     # 初始化 Gemini 客戶端
     if api_key:
         client = genai.Client(api_key=api_key)
     elif os.environ.get("GEMINI_API_KEY"):
         client = genai.Client()
     else:
-        return False, "未設定 Gemini API Key，請在左側邊欄輸入。"
+        return False, "未設定 Gemini API Key，請在左側邊欄輸入或建立 API_Key.txt。"
         
     subtitles = parse_srt_for_correction(input_file)
     
@@ -66,16 +155,30 @@ def correct_srt_text_only(input_file: str, output_file: str, api_key: str = None
             llm_payload += f"{sub['index']}|||{sub['text']}\n"
 
     system_instruction = """
-    你是一個專業的歌詞校對專家。請修正以下歌詞中的同音字錯誤或不合理的空耳詞彙。
+    You are an expert lyric proofreader. Your task is to correct homophone errors, mondegreens (misheard lyrics), and typos in the provided lyrics based on context.
 
-    【輸入與輸出格式嚴格限制】：
-    1. 每一行的格式為「行號|||歌詞」。
-    2. 你必須原封不動地保留「行號」與「|||」符號。
-    3. **絕對不可**合併行、刪除行或新增行。輸入有幾行，輸出就必須有幾行。
-    4. 你的輸出必須「只有」修正後的內容，不要加入任何問候語、解釋或 Markdown 標記 (如 ```)。
-    5. 若該行歌詞沒有錯字，請直接輸出原本的「行號|||歌詞」。
-    6. 請根據上下文修正錯字（例如將 Bed for long the cross 修正為語意正確的歌詞）。
-    7. 尊重原語言與方言（如台語/閩南語、繁體中文、英文）。若是台語歌詞，請保留台語漢字語法，絕對不可強行翻譯為現代標準國語，只需修正發音相近的錯字。
+    ### STRICT FORMATTING RULES:
+    1. Each line of your input and output must strictly follow the format: `LineNumber|||LyricText`
+    2. You MUST NOT merge, delete, or add any lines. The number of output lines must EXACTLY match the input lines.
+    3. Keep the `LineNumber` and `|||` separator exactly as provided.
+    4. DO NOT output any markdown tags (like ```), greetings, or explanations. ONLY output the corrected lines.
+    5. If a line requires no correction, output the original line exactly as it was.
+
+    ### LINGUISTIC RULES:
+    1. Correct obvious homophone typos or misheard phrases based on context (e.g., fixing "Bed for long the cross" to a contextually correct lyric).
+    2. STRICTLY respect the original language and dialects (e.g., Traditional Chinese, Taiwanese Hokkien, English). 
+    3. DO NOT translate Taiwanese Hokkien into standard Mandarin. ONLY fix phonetic/homophone typos while preserving the Hokkien grammar and vocabulary.
+
+    ### EXAMPLE:
+    【Input】
+    1|||因位我剛好欲見你
+    2|||這是一首簡單的小情歌
+    3|||Bed for long the cross
+
+    【Output】
+    1|||因為我剛好遇見你
+    2|||這是一首簡單的小情歌
+    3|||Battle on the cross
     """
 
     try:
@@ -85,7 +188,7 @@ def correct_srt_text_only(input_file: str, output_file: str, api_key: str = None
         for attempt in range(max_retries):
             try:
                 response = client.models.generate_content(
-                    model='gemma-4-31b-it',
+                    model='gemini-3.1-flash-lite',
                     contents=[system_instruction, f"【原始歌詞資料】：\n{llm_payload}"],
                     config=types.GenerateContentConfig(
                         temperature=0.1, 
@@ -93,10 +196,10 @@ def correct_srt_text_only(input_file: str, output_file: str, api_key: str = None
                 )
                 break
             except Exception as api_err:
-                # 處理伺服器忙碌(503)或請求過多(429)的情況
-                if ("503" in str(api_err) or "429" in str(api_err) or "UNAVAILABLE" in str(api_err)) and attempt < max_retries - 1:
+                # 處理伺服器忙碌(503)、請求過多(429)或內部錯誤(500)的情況
+                if ("503" in str(api_err) or "429" in str(api_err) or "500" in str(api_err) or "UNAVAILABLE" in str(api_err)) and attempt < max_retries - 1:
                     import time
-                    print(f"API 忙碌中，等待 {retry_delay} 秒後重試... ({attempt + 1}/{max_retries})")
+                    print(f"API 忙碌或伺服器錯誤 ({api_err})，等待 {retry_delay} 秒後重試... ({attempt + 1}/{max_retries})")
                     time.sleep(retry_delay)
                     retry_delay *= 2
                 else:
@@ -207,7 +310,7 @@ def get_processed_files(output_dir):
 #清除輸出資料夾
 def clear_output_folder(output_dir):
     if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
+        shutil.rmtree(output_dir, ignore_errors=True)
         os.makedirs(output_dir, exist_ok=True)
 
 #---背景任務管理---
@@ -246,7 +349,11 @@ class TaskManager:
             video = YouTubeDownload.download_youtube_video(url)
             
             self.status_message = "進行人聲分離..."
-            separation = MusicTools.run_separation(audio)
+            # 透過獨立行程執行，避免鎖死 GIL
+            separation = self._run_worker_subprocess("separation", audio)
+            if not separation:
+                self.status_message = "✗ 處理失敗 (人聲分離錯誤)"
+                return
 
             target_audio = separation[0] 
             
@@ -267,7 +374,8 @@ class TaskManager:
             merge = YouTubeDownload.merge_video_audio(video, target_audio)
 
             self.status_message = f"Whisper 歌詞辨識中(語言: {input_language})..."
-            AsrReturn = MusicTools.run_ASR(separation[1],Input_language=input_language)
+            # 透過獨立行程執行，避免鎖死 GIL
+            AsrReturn = self._run_worker_subprocess("asr", separation[1], input_language)
             
             srt_source_path = None
             if AsrReturn and len(AsrReturn) > 0:
@@ -290,14 +398,17 @@ class TaskManager:
                 final_name_base = f"{final_name_base}_{timestamp}"
                 safe_name = f"{final_name_base}{file_extension}"
             
-            #最終檔名
+            #最終路徑
             out_video_path = os.path.join(output_dir, safe_name)
             out_srt_path = os.path.join(output_dir, f"{final_name_base}.srt")
+            
+            # 確保資料夾存在以防 WinError 3
+            os.makedirs(output_dir, exist_ok=True)
             
             if os.path.exists(merge):
                 if os.path.abspath(merge) != os.path.abspath(out_video_path):
                     if os.path.exists(out_video_path): os.remove(out_video_path)
-                    os.replace(merge, out_video_path)
+                    shutil.move(merge, out_video_path)
             else:
                 with open(out_video_path, 'w') as f: f.write("dummy content")
 
@@ -306,14 +417,21 @@ class TaskManager:
                 shutil.move(srt_source_path, out_srt_path)
                 
                 # 在這裡進行歌詞 AI 校正
+                correction_msg = ""
+                gemini_success = True
                 if use_gemini:
                     self.status_message = "進行 AI 歌詞校正中..."
-                    success, msg = correct_srt_text_only(out_srt_path, out_srt_path, api_key)
-                    if not success:
+                    gemini_success, msg = correct_srt_text_only(out_srt_path, out_srt_path, api_key)
+                    print(f"correct_srt_text_only 執行結果 -> success: {gemini_success}, msg: {msg}")
+                    correction_msg = f"\nAI校正：{msg}"
+                    if not gemini_success:
                         print(f"Gemini correction failed: {msg}")
 
             self.last_completed_file = safe_name
-            self.status_message = f"✓ 完成：{safe_name}"
+            if use_gemini and not gemini_success:
+                self.status_message = f"✗ 影片已處理，但AI校正失敗：{safe_name}{correction_msg}"
+            else:
+                self.status_message = f"✓ 完成：{safe_name}{correction_msg}"
             
         except Exception as e:
             self.status_message = f"✗ 錯誤: {str(e)}"
@@ -322,14 +440,66 @@ class TaskManager:
             with self.lock:
                 self.is_processing = False
 
+    def _run_worker_subprocess(self, task, *args):
+        import subprocess
+        import sys
+        import json
+        import os
+        
+        worker_script = os.path.join(os.path.dirname(__file__), "worker.py")
+        cmd = [sys.executable, worker_script, task] + list(args)
+        
+        try:
+            # 確保能正確解析 JSON 與中文，加入 errors='replace' 防止非 UTF-8 輸出導致 _readerthread 崩潰
+            # 同時設定 PYTHONIOENCODING 確保 worker.py 輸出純 UTF-8
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            
+            process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT, 
+                text=True, 
+                encoding='utf-8', 
+                errors='replace', 
+                env=env,
+                bufsize=1
+            )
+            
+            out_text = ""
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                out_text += line
+                
+            process.wait()
+            
+            if process.returncode != 0:
+                print(f"Subprocess failed with return code {process.returncode}")
+                return None
+            
+            if out_text and "---RESULT_START---" in out_text and "---RESULT_END---" in out_text:
+                json_str = out_text.split("---RESULT_START---")[1].split("---RESULT_END---")[0].strip()
+                return json.loads(json_str)
+            else:
+                print(f"Worker Output/Error:\n{out_text}")
+                return None
+                
+        except Exception as e:
+            print(f"Subprocess failed with error: {e}")
+            return None
+
 task_manager = TaskManager()
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_cached_recommendations(song_name, count=3):
+    return YouTubeDownload.get_recommendations_by_artist(song_name, count=count)
 
 #---介面顯示類別---
 
 class WebDisplay:
     #初始化
     def __init__(self):
-        self.output_dir = "output"
+        self.output_dir = "static/output"
         os.makedirs(self.output_dir, exist_ok=True)
 
         if 'is_initialized' not in st.session_state:
@@ -337,8 +507,24 @@ class WebDisplay:
             st.session_state.current_playing_name = None
 
     #左方佇列
-    @st.fragment(run_every=2)
     def sidebar_queue_fragment(self):
+        if task_manager.is_processing:
+            self._sidebar_queue_polling()
+        else:
+            self._sidebar_queue_static()
+
+    @st.fragment(run_every=2)
+    def _sidebar_queue_polling(self):
+        self._render_queue_content()
+        # 當任務完成時，觸發整頁重整以跳出自動輪詢的迴圈
+        if not task_manager.is_processing:
+            st.rerun()
+
+    @st.fragment
+    def _sidebar_queue_static(self):
+        self._render_queue_content()
+
+    def _render_queue_content(self):
         st.header("處理列表")
         
         #是否執行中
@@ -369,6 +555,8 @@ class WebDisplay:
         if st.button("清除所有紀錄", width='stretch'):
             clear_output_folder(self.output_dir)
             st.session_state.current_playing_name = None
+            task_manager.status_message = ""
+            task_manager.last_completed_file = None
             st.rerun()
 
     #主畫面
@@ -387,8 +575,13 @@ class WebDisplay:
 
         #側邊欄
         with st.sidebar:
-            st.text_input("Gemini API Key", type="password", key="gemini_api_key", help="若要使用 AI 校正，請輸入 API Key (也可以設定於環境變數 GEMINI_API_KEY)")
-            self.sidebar_queue_fragment()
+            default_api_key = ""
+            if os.path.exists("API_Key.txt"):
+                with open("API_Key.txt", "r", encoding="utf-8") as f:
+                    default_api_key = f.read().strip()
+            
+            st.text_input("Gemini API Key", value=default_api_key, type="password", key="gemini_api_key", help="若要使用 AI 校正，請輸入 API Key (也可以設定於環境變數 GEMINI_API_KEY 或建立 API_Key.txt)")
+            sidebar_placeholder = st.empty()
 
         #輸入框
         #建立一個容器放在最上方
@@ -396,7 +589,7 @@ class WebDisplay:
             with st.form("task_form"):
                 c1, c4, c2, c_gemini, c3 = st.columns([4, 1.5, 1.5, 1.5, 2], vertical_alignment="bottom") #調整欄位比例
                 with c1:
-                    url_input = st.text_input("YouTube URL", placeholder="請輸入 YouTube 連結...", label_visibility="collapsed", key="url_input_key")
+                    url_input = st.text_input("YouTube URL 或 關鍵字", placeholder="請輸入 YouTube 連結或歌曲關鍵字...", label_visibility="collapsed", key="url_input_key")
                 with c4:
                     #建立語言映射字典
                     lang_mapping = {"中文": "zh", "英文": "en", "閩南語": "nan"}
@@ -405,23 +598,29 @@ class WebDisplay:
                     #升降調選擇(-6到+6半音)
                     semitones = st.number_input("升降調 (半音)", min_value=-12, max_value=12, value=0, step=1, help="正數為升調，負數為降調")
                 with c_gemini:
-                    use_gemini = st.checkbox("AI 歌詞校正", value=True, key="use_gemini_chk")
+                    use_gemini = st.checkbox("上下文歌詞校正", value=True, key="use_gemini_chk")
                 with c3:
                     submitted = st.form_submit_button("加入背景處理", type="primary", width='stretch')
                 
                 if submitted:
                     if url_input:
                         if not task_manager.is_processing:
-                            current_api_key = st.session_state.get("gemini_api_key", "").strip()
-                            success = task_manager.start_task(url_input, self.output_dir, semitones, selected_lang, use_gemini, current_api_key)
-                            if success:
-                                st.toast(f"已加入排程(變調:{semitones})，請留意側邊欄狀態！")
+                            with st.spinner("🔍 正在搜尋影片..."):
+                                actual_url = YouTubeDownload.get_actual_url(url_input)
+                                
+                            if actual_url:
+                                current_api_key = st.session_state.get("gemini_api_key", "").strip()
+                                success = task_manager.start_task(actual_url, self.output_dir, semitones, selected_lang, use_gemini, current_api_key)
+                                if success:
+                                    st.toast(f"已加入排程(變調:{semitones})，請留意側邊欄狀態！")
+                                else:
+                                    st.warning("任務啟動失敗。")
                             else:
-                                st.warning("任務啟動失敗。")
+                                st.warning("找不到相關影片，請更換關鍵字。")
                         else:
                             st.warning("目前已有任務正在執行，請稍候。")
                     else:
-                        st.warning("請輸入有效的 URL")
+                        st.warning("請輸入有效的 URL 或關鍵字")
 
         st.markdown("---") #分隔線
 
@@ -432,7 +631,7 @@ class WebDisplay:
         target_file = st.session_state.current_playing_name
         
         #預先處理好路徑和資料
-        video_b64 = ""
+        video_url = ""
         subtitles_json = "[]"
         has_video = False
 
@@ -441,7 +640,14 @@ class WebDisplay:
             srt_path = os.path.splitext(video_path)[0] + ".srt"
             
             if os.path.exists(video_path):
-                video_b64 = get_video_base64(video_path)
+                local_port = get_local_server_port()
+                import urllib.parse
+                if local_port:
+                    host_ip = get_local_ip()
+                    video_url = f"http://{host_ip}:{local_port}/{urllib.parse.quote(target_file)}"
+                else:
+                    # 如果 Port 全部被佔用，退回原本的方法
+                    video_url = f"/app/static/output/{urllib.parse.quote(target_file)}"
                 has_video = True
                 if os.path.exists(srt_path):
                     subs = parse_srt(srt_path)
@@ -456,7 +662,7 @@ class WebDisplay:
         with col_player:
             if has_video:
                  #這裡呼叫拆分後的播放器HTML(僅含影片標籤)
-                self.render_video_player_only(video_b64, subtitles_json)
+                self.render_video_player_only(video_url, subtitles_json)
             else:
                 st.empty()
                 st.markdown(
@@ -489,7 +695,7 @@ class WebDisplay:
         #才能透過JS互相控制(點歌詞跳轉影片)
         #我們使用CSS來模擬Streamlit的左右分欄效果
         if has_video:
-            self.render_split_layout_player(video_b64, subtitles_json,target_file)
+            self.render_split_layout_player(video_url, subtitles_json,target_file)
 
         if target_file:
             st.markdown("---")
@@ -501,7 +707,7 @@ class WebDisplay:
             
             with st.spinner("正在尋找推薦歌曲..."):
                 #呼叫你的推薦函式
-                recommendations = YouTubeDownload.get_recommendations_by_artist(song_name, count=3)
+                recommendations = get_cached_recommendations(song_name, count=3)
             
             if recommendations:
                 def add_to_queue_callback(url, title, semi, lang, use_gem, api_key):
@@ -608,8 +814,12 @@ class WebDisplay:
             else:
                 st.info("目前沒有推薦歌曲。")
 
+        # 在所有表單與操作處理完畢後，再渲染側邊欄，確保狀態是最新的
+        with sidebar_placeholder.container():
+            self.sidebar_queue_fragment()
+
     #已棄用
-    def render_video_player_only(self, video_b64, subtitles_json):
+    def render_video_player_only(self, video_url, subtitles_json):
         """
         這個函式已經被棄用，改用 render_split_layout_player。
         因為 Streamlit Component 是 iframe,跨 iframe 無法通訊
@@ -617,15 +827,18 @@ class WebDisplay:
         pass
     
     #實際渲染函式
-    def render_split_layout_player(self, video_b64, subtitles_json,target_file):
+    def render_split_layout_player(self, video_url, subtitles_json,target_file):
         """
         渲染一個包含「左邊影片」和「右邊歌詞」的HTML Component。
         修改為響應式高度設計。
         """
-        
         html_content = f"""
-            <style>
-                /* Reset & Base */
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <style>
+                    /* Reset & Base */
                 body {{ font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; overflow: hidden; }}
                 
                 /* 主要容器：使用 Flexbox 佈局 */
@@ -754,8 +967,8 @@ class WebDisplay:
             <div class="main-container">
                 <div class="video-section">
                     <div class="video-wrapper">
-                        <video id="myVideo" controls autoplay playsinline>
-                            <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                        <video id="myVideo" controls autoplay playsinline crossorigin="anonymous">
+                            <source src="{video_url}" type="video/mp4">
                         </video>
                     </div>
                     <div class="time-display">
@@ -816,12 +1029,30 @@ class WebDisplay:
                     }}
                 }};
             </script>
+            </body>
+            </html>
         """
         
-        #Streamlit的components.html需要一個初始高度
-        #雖然我們在CSS裡已經設為響應式，但這個Python參數決定了iframe挖多大的洞
-        #設定600~700左右通常能適配大部分16:9影片在寬螢幕下的高度
-        components.html(html_content, height=600, scrolling=False)
+        # 將 HTML 寫入靜態檔案，並透過 iframe 載入
+        # 這樣在 st.rerun() 時，只要 URL 不變，Streamlit 就不會重新載入 iframe，影片就不會中斷！
+        import re
+        safe_name = os.path.splitext(target_file)[0]
+        safe_name = re.sub(r'[\\/*?:"<>|]', "", safe_name)
+        player_filename = f"player_{safe_name}.html"
+        player_path = os.path.join(self.output_dir, player_filename)
+        
+        with open(player_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+            
+        local_port = get_local_server_port()
+        import urllib.parse
+        if local_port:
+            host_ip = get_local_ip()
+            player_url = f"http://{host_ip}:{local_port}/{urllib.parse.quote(player_filename)}"
+        else:
+            player_url = f"/{self.output_dir}/{urllib.parse.quote(player_filename)}"
+            
+        components.iframe(player_url, height=600, scrolling=False)
 
 if __name__ == "__main__":
     app = WebDisplay()

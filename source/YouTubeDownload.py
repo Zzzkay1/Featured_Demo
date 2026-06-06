@@ -12,8 +12,48 @@ class YouTubeDownload:
         pass
     @staticmethod
     def sanitize_filename(name):
+        if name:
+            try:
+                # 修正 Windows 下常見的 pytubefix 亂碼問題 (UTF-8 被誤用 cp950 解碼)
+                name = name.encode('cp950').decode('utf-8')
+            except Exception:
+                pass
         #移除檔名中不合法的字元
         return re.sub(r'[\\/:*?"<>|]', '_', name)
+
+    @staticmethod
+    def get_correct_youtube_title(url):
+        import urllib.request
+        import re
+        import html as html_lib
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                html_content = response.read().decode('utf-8')
+                match = re.search(r'<title>(.*?)</title>', html_content)
+                if match:
+                    title = match.group(1).replace(' - YouTube', '').strip()
+                    title = html_lib.unescape(title)
+                    invalid_titles = ["你的瀏覽器已不適用", "Your browser is no longer supported", "Before you continue", "YouTube"]
+                    for invalid in invalid_titles:
+                        if invalid in title:
+                            return None
+                    return title
+        except Exception as e:
+            print(f"Error fetching title directly: {e}")
+        return None
+    @staticmethod
+    def get_actual_url(query: str) -> str:
+        from pytubefix import Search
+        if query.startswith("http://") or query.startswith("https://"):
+            return query
+        try:
+            results = Search(query)
+            if results.videos:
+                return results.videos[0].watch_url
+        except Exception as e:
+            print(f"搜尋失敗: {e}")
+        return None
     @staticmethod
     def check_YouTube_available(url: str) -> bool:
         try:
@@ -47,8 +87,10 @@ class YouTubeDownload:
                 return None
             try:
                 yt = YouTube(video_url)
-                title = YouTubeDownload.sanitize_filename(yt.title)
-                audio_stream = yt.streams.get_audio_only()
+                correct_title = YouTubeDownload.get_correct_youtube_title(video_url)
+                title = YouTubeDownload.sanitize_filename(correct_title if correct_title else yt.title)
+                
+                audio_stream = yt.streams.filter(only_audio=True).first()
 
                 os.makedirs("download", exist_ok=True)
                 os.path.join("download", f"{title}.m4a")
@@ -83,10 +125,11 @@ class YouTubeDownload:
                 return None
             try:
                 yt = YouTube(video_url)
-                title = YouTubeDownload.sanitize_filename(yt.title)
+                correct_title = YouTubeDownload.get_correct_youtube_title(video_url)
+                title = YouTubeDownload.sanitize_filename(correct_title if correct_title else yt.title)
 
                 #優先取得1080p無聲影片
-                video_stream = yt.streams.filter(res="1080p", mime_type="video/mp4", only_video=True).first()
+                video_stream = yt.streams.filter(res="1080p", file_extension="mp4", progressive=False, type="video").first()
                 #若無1080p，退而求其次找最高畫質的影片
                 if not video_stream:
                     video_stream = yt.streams.filter(mime_type="video/mp4").order_by("resolution").desc().first()
@@ -138,7 +181,8 @@ class YouTubeDownload:
     def download_captions_by_language_code(video_url:str|list, language_code:str|None)->str:
         try:
             yt = YouTube(video_url)
-            title = YouTubeDownload.sanitize_filename(yt.title)
+            correct_title = YouTubeDownload.get_correct_youtube_title(video_url)
+            title = YouTubeDownload.sanitize_filename(correct_title if correct_title else yt.title)
             caption = yt.captions
             #caption[language_code]
 
@@ -185,7 +229,7 @@ class YouTubeDownload:
             subprocess.run(cmd, check=True)
             return f'"{output_path}"'
         except Exception as e:
-            raise f"合併失敗：{e}"
+            raise Exception(f"合併失敗：{e}")
 
     def get_recommendations_by_artist(song_name, count=3):
             yt = YTMusic()
