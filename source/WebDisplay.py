@@ -61,7 +61,7 @@ def get_free_port(start_port=8000):
     return None
 
 def start_local_file_server(directory, port=8000):
-    """啟動一個背景 Tornado HTTP Server 專門提供靜態檔案 (完美支援 Range Requests)"""
+    """啟動一個背景Tornado HTTP Server專門提供靜態檔案"""
     free_port = get_free_port(port)
     if not free_port:
         return None
@@ -100,7 +100,7 @@ def get_local_server_port():
 
 #---Gemini 字幕校正工具函式---
 def parse_srt_for_correction(file_path):
-    """讀取並解析 SRT 檔案，抽離時間軸與文字"""
+    """讀取並解析SRT檔案，抽離時間軸與文字"""
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
@@ -122,7 +122,7 @@ def parse_srt_for_correction(file_path):
     return subtitles
 
 def write_srt_for_correction(subtitles, output_path):
-    """將修正後的字幕陣列重新組裝成 SRT 檔案"""
+    """將修正後的字幕陣列重新組裝成SRT檔案"""
     with open(output_path, 'w', encoding='utf-8') as f:
         for sub in subtitles:
             f.write(f"{sub['index']}\n")
